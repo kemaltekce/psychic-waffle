@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+psychic_waffle.egg-info
+

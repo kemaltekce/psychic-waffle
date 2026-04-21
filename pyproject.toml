@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psychic-waffle"
+version = "0.1.0"
+description = "Project for speech emotion recognition"
+readme = "README.md"
+requires-python = "==3.12.4"
+dependencies = []
+
+[project.scripts]
+psy = "psychic.main:main"
+
+[tool.setuptools.packages.find]
+include = ["psychic*"]
+
