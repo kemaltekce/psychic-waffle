@@ -8,7 +8,13 @@ version = "0.1.0"
 description = "Project for speech emotion recognition"
 readme = "README.md"
 requires-python = "==3.12.4"
-dependencies = []
+dependencies = [
+  "black",
+  "flake8",
+  "pip-tools",
+  "torch",
+  "torchvision",
+]
 
 [project.scripts]
 psy = "psychic.main:main"

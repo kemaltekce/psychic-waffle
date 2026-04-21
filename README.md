@@ -11,11 +11,30 @@ Speech Emotion Research - Building Speech Emotion Recognition (SER) models
   ```
 2. Install the project with
   ```
-  python -m pip install -e .
+  pip install -e .
+  ```
+3. If you want to use the frozen/pinned package versions install them with
+  ```
+  pip install -r requirements.txt
   ```
 
 
 ## Development
 
+### Running the project
+
 Run the project with `psy` after installing.
+
+### Dependency management
+
+If you want to install new dependencies, follow the instructions below:
+
+1. Add the new package to `pyproject.toml`
+
+2. Install it with `pip install -e .`
+
+3. Freeze/pin versions in `requirements.txt` by running
+  ```
+  pip-compile pyproject.toml --resolver=backtracking
+  ```
 
