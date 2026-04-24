@@ -17,8 +17,11 @@ dependencies = [
 ]
 
 [project.scripts]
-psy = "psychic.main:main"
+psy = "psychic.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["psychic*"]
+
+[tool.black]
+line-length = 79
 
