@@ -1,12 +1,13 @@
 import librosa
 import numpy as np
+import matplotlib.pyplot as plt
 from typing import Callable, Optional, Dict, Any, Tuple
 import os
 from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 
 class RavdessAudioDataset(Dataset):
@@ -137,12 +138,11 @@ class RavdessAudioDataset(Dataset):
         sample = self.samples[idx]
 
         # define type to get rid of warning
-        waveform_np: np.ndarray
         waveform_np, _ = librosa.load(
             sample["path"], sr=self.sample_rate, mono=True
         )
 
-        waveform: torch.Tensor = torch.tensor(waveform_np, dtype=torch.float32)
+        waveform = torch.tensor(waveform_np, dtype=torch.float32)
 
         if self.transform:
             waveform = self.transform(waveform)
@@ -165,8 +165,112 @@ class NeuralNetwork(nn.Module):
         return x
 
 
+def transform(
+    sample_rate: int = 16_000,
+    duration_sec: float = 4.0,
+    n_mels: int = 64,
+    n_fft: int = 1024,
+    win_length: int = 400,
+    hop_length: int = 160,
+    eps: float = 1e-8,
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """
+    Build a preprocessing function for audio data/wavefroms.
+
+    The returned callable converts a 1D waveform tensor into a normalized
+    log-mel spectrogram by enforcing a fixed duration, scaling the waveform,
+    extracting mel features, and standardizing the result.
+
+    Parameters
+    ----------
+    sample_rate:
+        Sampling rate used for the input waveform.
+    duration_sec:
+        Target waveform duration before feature extraction.
+    n_mels:
+        Number of mel frequency bins in the output spectrogram.
+    n_fft:
+        FFT size used to compute each spectrogram frame.
+    win_length:
+        Window size, in samples, for each analysis frame.
+    hop_length:
+        Step size, in samples, between consecutive frames.
+    eps:
+        Small constant used to avoid division by zero during normalization.
+    """
+    target_num_samples = int(sample_rate * duration_sec)
+
+    def apply(waveform: torch.Tensor) -> torch.Tensor:
+
+        # Force a fixed-length input so every sample produces the same shape.
+        if waveform.numel() < target_num_samples:
+            pad_amount = target_num_samples - waveform.numel()
+            waveform = torch.nn.functional.pad(waveform, (0, pad_amount))
+        else:
+            trim_amount = waveform.numel() - target_num_samples
+            left_trim = trim_amount // 2
+            right_trim = left_trim + target_num_samples
+            waveform = waveform[left_trim:right_trim]
+
+        # TODO normalizing wavefrom could remove important information.
+        # Scale amplitudes into a stable range without changing silence.
+        peak = waveform.abs().max()
+        if peak > 0:
+            waveform = waveform / peak
+
+        # Convert the waveform into a compact time-frequency representation.
+        mel_spectrogram = librosa.feature.melspectrogram(
+            y=waveform.numpy(),
+            sr=sample_rate,
+            n_fft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+            n_mels=n_mels,
+        )
+
+        # Log scaling compresses large energy differences and is standard for
+        # audio models.
+        log_mel_spectrogram = librosa.power_to_db(mel_spectrogram, ref=np.max)
+
+        spectrogram = torch.tensor(log_mel_spectrogram, dtype=torch.float32)
+        # Standardize each spectrogram so training sees a consistent value
+        # range.
+        spectrogram = (spectrogram - spectrogram.mean()) / (
+            spectrogram.std() + eps
+        )
+
+        return spectrogram
+
+    return apply
+
+
+def plot_spectrogram(data: torch.Tensor, meta: Dict[str, Any]) -> None:
+    """Plot a normalized log-mel spectrogram with metadata."""
+
+    plt.figure(figsize=(10, 4))
+    plt.imshow(data.numpy(), aspect="auto", origin="lower", cmap="magma")
+    plt.colorbar(label="Normalized log-mel value")
+    plt.title(f"Emotion: {meta['emotion']}, Actor: {meta['actor']}")
+    plt.xlabel("Time frames")
+    plt.ylabel("Mel bins")
+    plt.tight_layout()
+    plt.show()
+
+
 def run():
+    # define seed for reproducebility
     torch.manual_seed(456)
+    g = torch.Generator()
+    g.manual_seed(456)
+
+    # load data
+    dataset = RavdessAudioDataset(transform=transform())
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, generator=g)
+    data, meta = next(iter(dataloader))
+
+    plot_spectrogram(data[0], {k: v[0] for k, v in meta.items()})
+
+    # Dummy model
     X = torch.randn(10, 1)
     y = X @ torch.tensor([[2.0]]) + torch.tensor(1.0) + torch.rand(10, 1) * 0.1
 

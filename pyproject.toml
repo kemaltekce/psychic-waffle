@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = "==3.12.4"
 dependencies = [
   "black",
+  "matplotlib",
   "flake8",
   "librosa",
   "pip-tools",

@@ -20,12 +20,18 @@ click==8.3.2
     # via
     #   black
     #   pip-tools
+contourpy==1.3.3
+    # via matplotlib
+cycler==0.12.1
+    # via matplotlib
 decorator==5.2.1
     # via librosa
 filelock==3.29.0
     # via torch
 flake8==7.3.0
     # via psychic-waffle (pyproject.toml)
+fonttools==4.62.1
+    # via matplotlib
 fsspec==2026.3.0
     # via torch
 idna==3.13
@@ -36,6 +42,8 @@ joblib==1.5.3
     # via
     #   librosa
     #   scikit-learn
+kiwisolver==1.5.0
+    # via matplotlib
 lazy-loader==0.5
     # via librosa
 librosa==0.11.0
@@ -44,6 +52,8 @@ llvmlite==0.47.0
     # via numba
 markupsafe==3.0.3
     # via jinja2
+matplotlib==3.10.9
+    # via psychic-waffle (pyproject.toml)
 mccabe==0.7.0
     # via flake8
 mpmath==1.3.0
@@ -58,7 +68,9 @@ numba==0.65.1
     # via librosa
 numpy==2.4.4
     # via
+    #   contourpy
     #   librosa
+    #   matplotlib
     #   numba
     #   scikit-learn
     #   scipy
@@ -70,12 +82,15 @@ packaging==26.1
     #   black
     #   build
     #   lazy-loader
+    #   matplotlib
     #   pooch
     #   wheel
 pathspec==1.0.4
     # via black
 pillow==12.2.0
-    # via torchvision
+    # via
+    #   matplotlib
+    #   torchvision
 pip-tools==7.5.3
     # via psychic-waffle (pyproject.toml)
 platformdirs==4.9.6
@@ -90,10 +105,14 @@ pycparser==3.0
     # via cffi
 pyflakes==3.4.0
     # via flake8
+pyparsing==3.3.2
+    # via matplotlib
 pyproject-hooks==1.2.0
     # via
     #   build
     #   pip-tools
+python-dateutil==2.9.0.post0
+    # via matplotlib
 pytokens==0.4.1
     # via black
 requests==2.33.1
@@ -104,6 +123,8 @@ scipy==1.17.1
     # via
     #   librosa
     #   scikit-learn
+six==1.17.0
+    # via python-dateutil
 soundfile==0.13.1
     # via librosa
 soxr==1.0.0
