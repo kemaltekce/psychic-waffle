@@ -20,7 +20,7 @@ Speech Emotion Research - Building Speech Emotion Recognition (SER) models
 
 ## Data
 
-Load the zip file `Audio_Speech_Actors_01-24.zip` from the [Affective Data Sience Lab](https://zenodo.org/records/1188976?preview_file=Audio_Speech_Actors_01-24.zip), save it in the `data/` directory and unzip it there. You should now have a folder in `data/` called `Ravdess_Audio_Speech_Actors_01-24` with other folders inside for each actor.
+This project uses the Ravdess dataset. Load the zip file `Audio_Speech_Actors_01-24.zip` from the [Affective Data Sience Lab](https://zenodo.org/records/1188976?preview_file=Audio_Speech_Actors_01-24.zip), save it in the `data/` directory and unzip it there. You should now have a folder in `data/` called `Ravdess_Audio_Speech_Actors_01-24` with other folders inside for each actor.
 
 
 ## Development

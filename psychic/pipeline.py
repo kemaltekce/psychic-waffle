@@ -1,17 +1,31 @@
 import librosa
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Callable, Optional, Dict, Any, Tuple
+from typing import Callable, Optional, Dict, Any, Tuple, List, TypedDict
 import os
-from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 
+class Sample(TypedDict):
+    path: str
+    modality: int
+    vocal_channel: int
+    emotion: int
+    intensity: int
+    statement: int
+    repetition: int
+    actor: int
+    duration_sec: float
+
+
 class RavdessAudioDataset(Dataset):
     """
+    Dataset for Ravdess Speech Emotion data. But only for audio-only and speech
+    data.
+
     ==================
     Dataset parameters
     ==================
@@ -19,12 +33,6 @@ class RavdessAudioDataset(Dataset):
     root_dir:
         Root folder of the RAVDESS dataset (actor subfolders expected).
         Default: "data/Ravdess_Audio_Speech_Actors_01-24"
-
-    identifier:
-        File prefix used to filter audio only speech samples (e.g. "03-01").
-
-    extension:
-        Audio file extension to include (default ".wav").
 
     sample_rate:
         Target sampling rate for loaded audio (default 16000 Hz).
@@ -93,27 +101,43 @@ class RavdessAudioDataset(Dataset):
         even numbers → female actors
     """
 
+    # loader only for speech and audio-only data
+    IDENTIFIER = "03-01"
+    EXTENSION = ".wav"
+
     def __init__(
         self,
-        root_dir: str | Path = "data/Ravdess_Audio_Speech_Actors_01-24",
-        identifier="03-01",
-        extension=".wav",
+        root_dir: str = "data/Ravdess_Audio_Speech_Actors_01-24",
         sample_rate: int = 16_000,
         transform: Optional[Callable] = None,
+        samples: Optional[List[Sample]] = None,
     ) -> None:
 
+        # TODO assert root dir should be string not path
         # TODO assert if file path doesn't exist
+        # TODO assert if samples not none or not list
+        # TODO assert if sample_rate doesn't make sense
 
-        self.samples = []
         self.transform = transform
         self.sample_rate = sample_rate
+        self.root_dir = root_dir
 
-        for actor_dir in os.listdir(root_dir):
-            actor_path = os.path.join(root_dir, actor_dir)
+        if samples is None:
+            self.samples = self._load_samples()
+        else:
+            self.samples = list(samples)
+
+    def _load_samples(self) -> list[Sample]:
+        samples = []
+
+        for actor_dir in os.listdir(self.root_dir):
+            actor_path = os.path.join(self.root_dir, actor_dir)
             for file in os.listdir(actor_path):
-                if file.startswith(identifier) & file.endswith(extension):
+                if file.startswith(self.IDENTIFIER) and file.endswith(
+                    self.EXTENSION
+                ):
                     full_path = os.path.join(actor_path, file)
-                    metadata = file.replace(extension, "").split("-")
+                    metadata = file.replace(self.EXTENSION, "").split("-")
                     sample = {
                         "path": full_path,
                         "modality": int(metadata[0]),
@@ -127,14 +151,37 @@ class RavdessAudioDataset(Dataset):
                             librosa.get_duration(path=full_path), 2
                         ),
                     }
-                    self.samples.append(sample)
+                    samples.append(sample)
 
         # TODO assert if samples is empty
+
+        return samples
+
+    def subset_actors(self, actor_ids: List[int]) -> "RavdessAudioDataset":
+        """Return a dataset view containing only the requested actors."""
+
+        # TODO assert if empty list of actor_ids
+
+        actor_ids_set = set(actor_ids)
+        samples = [
+            sample
+            for sample in self.samples
+            if sample["actor"] in actor_ids_set
+        ]
+
+        # TODO assert if samples empty
+
+        return RavdessAudioDataset(
+            root_dir=self.root_dir,
+            sample_rate=self.sample_rate,
+            transform=self.transform,
+            samples=samples,
+        )
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict[str, Any]]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Sample]:
         sample = self.samples[idx]
 
         # define type to get rid of warning
@@ -265,6 +312,7 @@ def run():
 
     # load data
     dataset = RavdessAudioDataset(transform=transform())
+    dataset = dataset.subset_actors([1, 2])
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True, generator=g)
     data, meta = next(iter(dataloader))
 
