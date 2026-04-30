@@ -1,3 +1,4 @@
+# TODO maybe replace librosa with torchaudio if librosa is too slow
 import librosa
 import numpy as np
 import matplotlib.pyplot as plt
@@ -194,6 +195,9 @@ class RavdessAudioDataset(Dataset):
         if self.transform:
             waveform = self.transform(waveform)
 
+        # add dimension to have channel information present for CNN forward
+        # waveform shape (height, width) -> (channel, height, width)
+        waveform = waveform.unsqueeze(0)
         return waveform, sample.copy()
 
 
@@ -212,9 +216,64 @@ class NeuralNetwork(nn.Module):
         return x
 
 
+class CNN(nn.Module):
+    """
+    Convolutional Neural Network for classifying spectrograms into the
+    8 RAVDESS emotions.
+    """
+
+    def __init__(
+        self,
+        conv1_out_channels: int = 16,
+        conv2_out_channels: int = 32,
+        hidden_dim1: int = 128,
+        hidden_dim2: int = 64,
+        output_dim: int = 8,
+    ) -> None:
+        super().__init__()
+        # the image size is 64*301 and we have two convolutional layers
+        flattened_dim = conv2_out_channels * 16 * 75
+
+        self.features = nn.Sequential(
+            nn.Conv2d(
+                in_channels=1,
+                out_channels=conv1_out_channels,
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2),
+            nn.Conv2d(
+                in_channels=conv1_out_channels,
+                out_channels=conv2_out_channels,
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(flattened_dim, hidden_dim1),
+            nn.ReLU(),
+            nn.Linear(hidden_dim1, hidden_dim2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim2, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO add assert of shape of x doesn't match. 4d expected because of
+        # batch and channel
+
+        x = self.features(x)
+        x = self.classifier(x)
+        return x
+
+
 def transform(
     sample_rate: int = 16_000,
-    duration_sec: float = 4.0,
+    duration_sec: float = 3.0,
     n_mels: int = 64,
     n_fft: int = 1024,
     win_length: int = 400,
@@ -304,6 +363,25 @@ def plot_spectrogram(data: torch.Tensor, meta: Dict[str, Any]) -> None:
     plt.show()
 
 
+def inspect_model(model: nn.Module):
+    # number of parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(
+        p.numel() for p in model.parameters() if p.requires_grad
+    )
+    print("Total params:", total_params)
+    print("Trainable params:", trainable_params)
+
+    # approximate memory size
+    param_size_bytes = sum(
+        p.numel() * p.element_size() for p in model.parameters()
+    )
+    buffer_size_bytes = sum(
+        b.numel() * b.element_size() for b in model.buffers()
+    )
+    print("Model size (MB):", (param_size_bytes + buffer_size_bytes) / 1024**2)
+
+
 def run():
     # define seed for reproducebility
     torch.manual_seed(456)
@@ -316,7 +394,11 @@ def run():
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True, generator=g)
     data, meta = next(iter(dataloader))
 
-    plot_spectrogram(data[0], {k: v[0] for k, v in meta.items()})
+    plot_spectrogram(data[0][0], {k: v[0] for k, v in meta.items()})
+
+    # modeling
+    model = CNN()
+    inspect_model(model)
 
     # Dummy model
     X = torch.randn(10, 1)
