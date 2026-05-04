@@ -383,6 +383,46 @@ def inspect_model(model: nn.Module):
     print("Model size (MB):", (param_size_bytes + buffer_size_bytes) / 1024**2)
 
 
+def evaluate(
+    model: nn.Module,
+    dataloader: DataLoader,
+    loss_fn: nn.Module,
+) -> tuple[float, float]:
+    """
+    Evaluate a model on a dataloader and return average loss and accuracy.
+
+    Args:
+        model: Neural network to evaluate.
+        dataloader: Batches of `(data, meta)` samples to score.
+        loss_fn: Loss function used to compute batch loss from predictions
+            and labels.
+
+    Returns:
+        A `(loss, accuracy)` tuple with dataset-level average loss and
+        classification accuracy.
+    """
+    model.eval()
+    with torch.no_grad():
+        total = 0
+        correct = 0
+        total_loss = 0
+        for data, meta in dataloader:
+            labels = meta["emotion"]
+            prediction = model(data)
+            total += labels.size(0)
+            probability = torch.softmax(prediction, dim=1)
+            probability_pred = probability.argmax(dim=1)
+            correct += (probability_pred == labels).sum().item()
+            loss = loss_fn(prediction, labels)
+            # corss entropy loss is mean value. multiply by size to
+            # calculate unskewed average with total later
+            total_loss += loss.item() * labels.size(0)
+        acc = correct / total
+        loss = total_loss / total
+    model.train()
+    return loss, acc
+
+
 def run():
     # define seed for reproducebility
     torch.manual_seed(456)
@@ -393,18 +433,20 @@ def run():
     dataset = RavdessAudioDataset(transform=transform())
     train_dataset = dataset.subset_actors(list(range(1, 19)))
     val_dataset = dataset.subset_actors(list(range(19, 22)))
-    # test_dataset = dataset.subset_actors(list(range(22, 25)))
+    test_dataset = dataset.subset_actors(list(range(22, 25)))
     train_dataloader = DataLoader(
         train_dataset, batch_size=16, shuffle=True, generator=g
     )
     val_dataloader = DataLoader(
         val_dataset, batch_size=16, shuffle=False, generator=g
     )
-    # test_dataloader = DataLoader(
-    #     test_dataset, batch_size=16, shuffle=False, generator=g
-    # )
+    test_dataloader = DataLoader(
+        test_dataset, batch_size=16, shuffle=False, generator=g
+    )
 
-    # dataloader = DataLoader(dataset, batch_size=32, shuffle=True, generator=g)
+    # dataloader = DataLoader(
+    #     dataset, batch_size=32, shuffle=True, generator=g
+    # )
     # data, meta = next(iter(dataloader))
     # plot_spectrogram(data[0][0], {k: v[0] for k, v in meta.items()})
 
@@ -414,6 +456,7 @@ def run():
     learning_rate = 0.001
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     loss_fn = nn.CrossEntropyLoss()
+    # TODO increase epochs
     epochs = 10
 
     # keep history of model training
@@ -425,8 +468,8 @@ def run():
     }
 
     # training loop
+    model.train()
     for epoch in range(1, epochs + 1):
-        model.train()
         total_loss = 0
         total = 0
         correct = 0
@@ -454,26 +497,7 @@ def run():
         avg_train_loss = total_loss / total
 
         # validation check
-        model.eval()
-        with torch.no_grad():
-            val_total = 0
-            val_correct = 0
-            val_total_loss = 0
-            for val_data, val_meta in val_dataloader:
-                val_labels = val_meta["emotion"]
-                val_prediction = model(val_data)
-                val_total += val_labels.size(0)
-                val_probability = torch.softmax(val_prediction, dim=1)
-                val_probability_pred = val_probability.argmax(dim=1)
-                val_correct += (
-                    (val_probability_pred == val_labels).sum().item()
-                )
-                val_loss = loss_fn(val_prediction, val_labels)
-                # corss entropy loss is mean value. multiply by size to
-                # calculate unskewed average with total later
-                val_total_loss += val_loss.item() * val_labels.size(0)
-            val_acc = val_correct / val_total
-            avg_val_loss = val_total_loss / val_total
+        avg_val_loss, val_acc = evaluate(model, val_dataloader, loss_fn)
 
         # save model history
         model_history["loss"].append(avg_train_loss)
@@ -488,11 +512,12 @@ def run():
             f"Val Loss = {avg_val_loss:.4f} / "
             f"Val Acc = {val_acc:.4f} / "
         )
-
+    avg_test_loss, test_acc = evaluate(model, test_dataloader, loss_fn)
+    print(f"Final Test: Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f}")
     __import__("ipdb").set_trace()
+
     # TODO keep track of best epoch run and save model weights and at the end pick best model
     # TODO stop training if val doesn't improve for x runs
-    # TODO add final test
     # TODO additional metrics to acc. recall, precision, f1, confusion metrix or per class accuracy
     # TODO plot model history
     # TODO plot confusion metrix
