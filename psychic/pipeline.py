@@ -25,7 +25,7 @@ class Sample(TypedDict):
 class RavdessAudioDataset(Dataset):
     """
     Dataset for Ravdess Speech Emotion data. But only for audio-only and speech
-    data.
+    data. Emotions are mapped from 01-08 to 0-7 for easier use with models.
 
     ==================
     Dataset parameters
@@ -143,7 +143,8 @@ class RavdessAudioDataset(Dataset):
                         "path": full_path,
                         "modality": int(metadata[0]),
                         "vocal_channel": int(metadata[1]),
-                        "emotion": int(metadata[2]),
+                        # map emotions to 0-7 for easier use with model
+                        "emotion": int(metadata[2]) - 1,
                         "intensity": int(metadata[3]),
                         "statement": int(metadata[4]),
                         "repetition": int(metadata[5]),
@@ -231,7 +232,7 @@ class CNN(nn.Module):
         output_dim: int = 8,
     ) -> None:
         super().__init__()
-        # the image size is 64*301 and we have two convolutional layers
+        # the image size is 64*301 and we have two pooling layers
         flattened_dim = conv2_out_channels * 16 * 75
 
         self.features = nn.Sequential(
@@ -390,35 +391,108 @@ def run():
 
     # load data
     dataset = RavdessAudioDataset(transform=transform())
-    dataset = dataset.subset_actors([1, 2])
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, generator=g)
-    data, meta = next(iter(dataloader))
+    train_dataset = dataset.subset_actors(list(range(1, 19)))
+    val_dataset = dataset.subset_actors(list(range(19, 22)))
+    # test_dataset = dataset.subset_actors(list(range(22, 25)))
+    train_dataloader = DataLoader(
+        train_dataset, batch_size=16, shuffle=True, generator=g
+    )
+    val_dataloader = DataLoader(
+        val_dataset, batch_size=16, shuffle=False, generator=g
+    )
+    # test_dataloader = DataLoader(
+    #     test_dataset, batch_size=16, shuffle=False, generator=g
+    # )
 
-    plot_spectrogram(data[0][0], {k: v[0] for k, v in meta.items()})
+    # dataloader = DataLoader(dataset, batch_size=32, shuffle=True, generator=g)
+    # data, meta = next(iter(dataloader))
+    # plot_spectrogram(data[0][0], {k: v[0] for k, v in meta.items()})
 
     # modeling
     model = CNN()
     inspect_model(model)
-
-    # Dummy model
-    X = torch.randn(10, 1)
-    y = X @ torch.tensor([[2.0]]) + torch.tensor(1.0) + torch.rand(10, 1) * 0.1
-
-    model = NeuralNetwork(1, 1)
-    learning_rate = 0.01
+    learning_rate = 0.001
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    loss_fn = nn.MSELoss()
-    epochs = 100
+    loss_fn = nn.CrossEntropyLoss()
+    epochs = 10
 
+    # keep history of model training
+    model_history = {
+        "loss": [],
+        "train_acc": [],
+        "val_loss": [],
+        "val_acc": [],
+    }
+
+    # training loop
     for epoch in range(1, epochs + 1):
-        y_hat = model(X)
-        loss = loss_fn(y_hat, y)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        model.train()
+        total_loss = 0
+        total = 0
+        correct = 0
 
-        if epoch % 10 == 0:
-            print(f"Epoch {epoch}: Loss = {loss.item():.4f}")
-            print(
-                "target, pred: \n", torch.stack([y[:, 0], y_hat[:, 0]], dim=1)
-            )
+        # train model
+        for data, meta in train_dataloader:
+            labels = meta["emotion"]
+
+            optimizer.zero_grad()
+            prediction = model(data)
+            loss = loss_fn(prediction, labels)
+            loss.backward()
+            optimizer.step()
+
+            total += labels.size(0)
+            # softmax unnecessary for code but here for debugging purposes
+            probability = torch.softmax(prediction, dim=1)
+            probability_pred = probability.argmax(dim=1)
+            correct += (probability_pred == labels).sum().item()
+            # corss entropy loss is mean value. multiply by size to calculate
+            # unskewed average with total later
+            total_loss += loss.item() * labels.size(0)
+
+        train_acc = correct / total
+        avg_train_loss = total_loss / total
+
+        # validation check
+        model.eval()
+        with torch.no_grad():
+            val_total = 0
+            val_correct = 0
+            val_total_loss = 0
+            for val_data, val_meta in val_dataloader:
+                val_labels = val_meta["emotion"]
+                val_prediction = model(val_data)
+                val_total += val_labels.size(0)
+                val_probability = torch.softmax(val_prediction, dim=1)
+                val_probability_pred = val_probability.argmax(dim=1)
+                val_correct += (
+                    (val_probability_pred == val_labels).sum().item()
+                )
+                val_loss = loss_fn(val_prediction, val_labels)
+                # corss entropy loss is mean value. multiply by size to
+                # calculate unskewed average with total later
+                val_total_loss += val_loss.item() * val_labels.size(0)
+            val_acc = val_correct / val_total
+            avg_val_loss = val_total_loss / val_total
+
+        # save model history
+        model_history["loss"].append(avg_train_loss)
+        model_history["train_acc"].append(train_acc)
+        model_history["val_loss"].append(avg_val_loss)
+        model_history["val_acc"].append(val_acc)
+
+        # if epoch % 10 == 0:
+        print(
+            f"Epoch {epoch}: Train Loss = {avg_train_loss:.4f} / "
+            f"Train Acc = {train_acc:.4f} / "
+            f"Val Loss = {avg_val_loss:.4f} / "
+            f"Val Acc = {val_acc:.4f} / "
+        )
+
+    __import__("ipdb").set_trace()
+    # TODO keep track of best epoch run and save model weights and at the end pick best model
+    # TODO stop training if val doesn't improve for x runs
+    # TODO add final test
+    # TODO additional metrics to acc. recall, precision, f1, confusion metrix or per class accuracy
+    # TODO plot model history
+    # TODO plot confusion metrix
