@@ -4,10 +4,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Callable, Optional, Dict, Any, Tuple, List, TypedDict
 import os
+from collections import Counter
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+
+ID_EMOTION_MAPPER = {
+    0: "neutral",
+    1: "calm",
+    2: "happy",
+    3: "sad",
+    4: "angry",
+    5: "fearful",
+    6: "disgust",
+    7: "surprised",
+}
 
 
 class Sample(TypedDict):
@@ -210,11 +222,12 @@ class CNN(nn.Module):
 
     def __init__(
         self,
-        conv1_out_channels: int = 16,
-        conv2_out_channels: int = 32,
-        hidden_dim1: int = 128,
-        hidden_dim2: int = 64,
+        conv1_out_channels: int = 8,
+        conv2_out_channels: int = 16,
+        hidden_dim1: int = 64,
+        hidden_dim2: int = 32,
         output_dim: int = 8,
+        dropout_p: float = 0.3,
     ) -> None:
         super().__init__()
         # the image size is 64*301 and we have two pooling layers
@@ -229,6 +242,7 @@ class CNN(nn.Module):
             ),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2),
+            nn.Dropout2d(p=dropout_p),
             nn.Conv2d(
                 in_channels=conv1_out_channels,
                 out_channels=conv2_out_channels,
@@ -237,14 +251,17 @@ class CNN(nn.Module):
             ),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2),
+            nn.Dropout2d(p=dropout_p),
         )
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Linear(flattened_dim, hidden_dim1),
             nn.ReLU(),
+            nn.Dropout(p=dropout_p),
             nn.Linear(hidden_dim1, hidden_dim2),
             nn.ReLU(),
+            nn.Dropout(p=dropout_p),
             nn.Linear(hidden_dim2, output_dim),
         )
 
@@ -389,15 +406,57 @@ def inspect_model(model: nn.Module):
         "Model specs: \n"
         f"    Total params: {total_params}"
         f"    Trainable params: {trainable_params}"
-        f"    Model size (MB): {model_size}"
+        f"    Model size (MB): {model_size:.2f}"
     )
+
+
+def dataset_summary(dataset: RavdessAudioDataset) -> None:
+    """
+    Print dataset size and class balance for a RAVDESS split.
+
+    Args:
+        dataset: Dataset split whose sample count and class frequencies
+            should be printed.
+    """
+    # TODO add assert check size of dataset
+    class_counts = Counter(sample["emotion"] for sample in dataset.samples)
+    print(
+        "Dataset summary: \n"
+        f"    Dataset size: {len(dataset)}"
+        f"    Class balance:"
+    )
+    for emotion_idx in range(8):
+        count = class_counts.get(emotion_idx, 0)
+        ratio = count / len(dataset)
+        print(f"    Class {emotion_idx}: {count} samples ({ratio:.2%})")
+
+
+def model_capacity_check(model: nn.Module, train_dataset_size: int) -> None:
+    """
+    Print a rough sanity check for model size relative to the train split.
+
+    Args:
+        model: Neural network whose parameter count should be inspected.
+        train_dataset_size: Number of samples in the training split used
+            to estimate model capacity relative to available data.
+    """
+    # TODO assert if model exists
+    total_params = sum(p.numel() for p in model.parameters())
+    params_per_train_sample = total_params / train_dataset_size
+    if params_per_train_sample > 1_000:
+        print(
+            "Capacity warning: this CNN is probably large for the "
+            "RAVDESS train split and may overfit."
+        )
+    else:
+        print("Capacity check: model size looks reasonable.")
 
 
 def evaluate(
     model: nn.Module,
     dataloader: DataLoader,
     loss_fn: nn.Module,
-) -> tuple[float, float]:
+) -> tuple[float, float, torch.Tensor, torch.Tensor]:
     """
     Evaluate a model on a dataloader and return average loss and accuracy.
 
@@ -408,11 +467,13 @@ def evaluate(
             and labels.
 
     Returns:
-        A `(loss, accuracy)` tuple with dataset-level average loss and
-        classification accuracy.
+        A `(loss, accuracy, labels, predictions)` tuple with dataset-level
+        average loss, classification accuracy, and all labels/predictions.
     """
     # TODO add asserts
     model.eval()
+    all_labels = []
+    all_predictions = []
     with torch.no_grad():
         total = 0
         correct = 0
@@ -423,6 +484,8 @@ def evaluate(
             total += labels.size(0)
             probability = torch.softmax(prediction, dim=1)
             probability_pred = probability.argmax(dim=1)
+            all_labels.append(labels.detach())
+            all_predictions.append(probability_pred.detach())
             correct += (probability_pred == labels).sum().item()
             loss = loss_fn(prediction, labels)
             # corss entropy loss is mean value. multiply by size to
@@ -432,7 +495,52 @@ def evaluate(
         loss = total_loss / total
     model.train()
     # TODO add assert e.g. model in train mode
-    return loss, acc
+    return (
+        loss,
+        acc,
+        torch.cat(all_labels),
+        torch.cat(all_predictions),
+    )
+
+
+def calculate_confusion_matrix(
+    labels: torch.Tensor, predictions: torch.Tensor, num_classes: int
+) -> torch.Tensor:
+    """
+    Build a confusion matrix with rows=true labels and cols=predictions.
+
+    Args:
+        labels: Ground-truth class ids for each evaluated sample.
+        predictions: Predicted class ids for each evaluated sample.
+        num_classes: Number of classes used to size the square matrix.
+    """
+    matrix = torch.zeros((num_classes, num_classes), dtype=torch.int64)
+    for label, prediction in zip(labels, predictions):
+        matrix[label.long(), prediction.long()] += 1
+    return matrix
+
+
+def display_confusion_matrix(
+    matrix: torch.Tensor, label_mapper: Dict[int, str]
+) -> None:
+    """
+    Print a confusion matrix in a compact table.
+
+    Args:
+        matrix: Square confusion matrix with true labels on rows and
+            predicted labels on columns.
+        label_mapper: Mapping from class id to human-readable emotion
+            label used for row names.
+    """
+    labels = [f"{label_mapper[idx]} ({idx})" for idx in range(matrix.size(1))]
+    header = " " * 19 + " ".join(
+        f"{f'({idx})':>4}" for idx in range(matrix.size(1))
+    )
+    lines = ["Test confusion matrix (rows=true, cols=pred):", header]
+    for idx, row in enumerate(matrix):
+        values = " ".join(f"{value.item():>4}" for value in row)
+        lines.append(f"{labels[idx]:>18} {values}")
+    print("\n".join(lines))
 
 
 def run():
@@ -443,6 +551,7 @@ def run():
 
     # load data
     dataset = RavdessAudioDataset(transform=transform())
+    dataset_summary(dataset)
     train_dataset = dataset.subset_actors(list(range(1, 19)))
     val_dataset = dataset.subset_actors(list(range(19, 22)))
     test_dataset = dataset.subset_actors(list(range(22, 25)))
@@ -465,6 +574,7 @@ def run():
     # modeling
     model = CNN()
     inspect_model(model)
+    model_capacity_check(model, len(train_dataset))
     learning_rate = 0.001
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     loss_fn = nn.CrossEntropyLoss()
@@ -518,7 +628,7 @@ def run():
         avg_train_loss = total_loss / total
 
         # validation check
-        avg_val_loss, val_acc = evaluate(model, val_dataloader, loss_fn)
+        avg_val_loss, val_acc, _, _ = evaluate(model, val_dataloader, loss_fn)
 
         # save model history
         model_history["loss"].append(avg_train_loss)
@@ -567,10 +677,13 @@ def run():
         f"Val Loss = {best_val_loss:.4f} / "
         f"Val Acc = {best_val_acc:.4f} / "
     )
-    avg_test_loss, test_acc = evaluate(model, test_dataloader, loss_fn)
-    print(f"Final Test: Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f}")
 
-    # TODO additional metrics to acc. recall, precision, f1, confusion metrix
-    # or per class accuracy
-    # TODO plot model history
-    # TODO plot confusion metrix
+    # final test. test model with test set
+    avg_test_loss, test_acc, test_labels, test_predictions = evaluate(
+        model, test_dataloader, loss_fn
+    )
+    print(f"Final Test: Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f}")
+    test_confusion_matrix = calculate_confusion_matrix(
+        test_labels, test_predictions, num_classes=8
+    )
+    display_confusion_matrix(test_confusion_matrix, ID_EMOTION_MAPPER)
