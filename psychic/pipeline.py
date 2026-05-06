@@ -1,5 +1,5 @@
-# TODO maybe replace librosa with torchaudio if librosa is too slow
-import librosa
+import copy
+import librosa  # TODO maybe use torchaudio for speed
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Callable, Optional, Dict, Any, Tuple, List, TypedDict
@@ -202,21 +202,6 @@ class RavdessAudioDataset(Dataset):
         return waveform, sample.copy()
 
 
-class NeuralNetwork(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super().__init__()
-        layer1_output_dim = 10
-
-        self.layer1 = nn.Linear(input_dim, layer1_output_dim)
-        self.activation = nn.Tanh()
-        self.layer2 = nn.Linear(layer1_output_dim, output_dim)
-
-    def forward(self, x):
-        x = self.activation(self.layer1(x))
-        x = self.layer2(x)
-        return x
-
-
 class CNN(nn.Module):
     """
     Convolutional Neural Network for classifying spectrograms into the
@@ -309,6 +294,8 @@ def transform(
 
     def apply(waveform: torch.Tensor) -> torch.Tensor:
 
+        # TODO add assert waveform not empty and size
+
         # Force a fixed-length input so every sample produces the same shape.
         if waveform.numel() < target_num_samples:
             pad_amount = target_num_samples - waveform.numel()
@@ -346,13 +333,24 @@ def transform(
             spectrogram.std() + eps
         )
 
+        # TODO add asserts
+
         return spectrogram
 
     return apply
 
 
 def plot_spectrogram(data: torch.Tensor, meta: Dict[str, Any]) -> None:
-    """Plot a normalized log-mel spectrogram with metadata."""
+    """
+    Plot a normalized log-mel spectrogram and annotate it with sample
+    metadata.
+
+    Args:
+        data: Two-dimensional spectrogram tensor to display.
+        meta: Metadata dictionary for the sample, expected to include at
+            least the `emotion` and `actor` fields for the plot title.
+    """
+    # TODO add assert. tensor size and meta keys
 
     plt.figure(figsize=(10, 4))
     plt.imshow(data.numpy(), aspect="auto", origin="lower", cmap="magma")
@@ -365,13 +363,19 @@ def plot_spectrogram(data: torch.Tensor, meta: Dict[str, Any]) -> None:
 
 
 def inspect_model(model: nn.Module):
+    """
+    Print a short summary of a model's parameter counts and approximate
+    memory footprint.
+
+    Args:
+        model: PyTorch module to inspect.
+    """
+    # TODO add assert
     # number of parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(
         p.numel() for p in model.parameters() if p.requires_grad
     )
-    print("Total params:", total_params)
-    print("Trainable params:", trainable_params)
 
     # approximate memory size
     param_size_bytes = sum(
@@ -380,7 +384,13 @@ def inspect_model(model: nn.Module):
     buffer_size_bytes = sum(
         b.numel() * b.element_size() for b in model.buffers()
     )
-    print("Model size (MB):", (param_size_bytes + buffer_size_bytes) / 1024**2)
+    model_size = (param_size_bytes + buffer_size_bytes) / 1024**2
+    print(
+        "Model specs: \n"
+        f"    Total params: {total_params}"
+        f"    Trainable params: {trainable_params}"
+        f"    Model size (MB): {model_size}"
+    )
 
 
 def evaluate(
@@ -401,6 +411,7 @@ def evaluate(
         A `(loss, accuracy)` tuple with dataset-level average loss and
         classification accuracy.
     """
+    # TODO add asserts
     model.eval()
     with torch.no_grad():
         total = 0
@@ -420,6 +431,7 @@ def evaluate(
         acc = correct / total
         loss = total_loss / total
     model.train()
+    # TODO add assert e.g. model in train mode
     return loss, acc
 
 
@@ -458,6 +470,7 @@ def run():
     loss_fn = nn.CrossEntropyLoss()
     # TODO increase epochs
     epochs = 10
+    early_stopping_patience = 3
 
     # keep history of model training
     model_history = {
@@ -466,6 +479,14 @@ def run():
         "val_loss": [],
         "val_acc": [],
     }
+    # track model validation performance for early stopping and best model
+    best_train_acc = 0.0
+    best_train_loss = float("inf")
+    best_val_acc = 0.0
+    best_val_loss = float("inf")
+    best_epoch = 0
+    best_model_state = copy.deepcopy(model.state_dict())
+    epochs_without_improvement = 0
 
     # training loop
     model.train()
@@ -512,12 +533,44 @@ def run():
             f"Val Loss = {avg_val_loss:.4f} / "
             f"Val Acc = {val_acc:.4f} / "
         )
+
+        # validation data for early stopping and model selection
+        validation_improved = val_acc > best_val_acc or (
+            np.isclose(val_acc, best_val_acc) and avg_val_loss < best_val_loss
+        )
+        if validation_improved:
+            best_train_acc = train_acc
+            best_train_loss = avg_train_loss
+            best_val_acc = val_acc
+            best_val_loss = avg_val_loss
+            best_epoch = epoch
+            best_model_state = copy.deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= early_stopping_patience:
+            print(
+                f"Early stopping at epoch {epoch}. "
+                f"No improvement for {epochs_without_improvement} epochs. "
+                f"Best epoch was {best_epoch}."
+            )
+            break
+
+    # pick best model
+    model.load_state_dict(best_model_state)
+    print(
+        f"Restored best model from epoch {best_epoch} "
+        "with best performance: \n"
+        f"    Train Loss = {best_train_loss:.4f} / "
+        f"Train Acc = {best_train_acc:.4f} / "
+        f"Val Loss = {best_val_loss:.4f} / "
+        f"Val Acc = {best_val_acc:.4f} / "
+    )
     avg_test_loss, test_acc = evaluate(model, test_dataloader, loss_fn)
     print(f"Final Test: Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f}")
-    __import__("ipdb").set_trace()
 
-    # TODO keep track of best epoch run and save model weights and at the end pick best model
-    # TODO stop training if val doesn't improve for x runs
-    # TODO additional metrics to acc. recall, precision, f1, confusion metrix or per class accuracy
+    # TODO additional metrics to acc. recall, precision, f1, confusion metrix
+    # or per class accuracy
     # TODO plot model history
     # TODO plot confusion metrix
