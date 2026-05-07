@@ -1,4 +1,5 @@
 import librosa  # TODO maybe use torchaudio for speed
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Callable, Optional, Dict, Any, Tuple, List, TypedDict
@@ -6,6 +7,9 @@ import os
 from collections import Counter
 import torch
 from torch.utils.data import Dataset
+
+logger = logging.getLogger("psychic")
+
 
 ID_EMOTION_MAPPER = {
     0: "neutral",
@@ -327,12 +331,13 @@ def dataset_summary(dataset: RavdessAudioDataset) -> None:
     """
     # TODO add assert check size of dataset
     class_counts = Counter(sample["emotion"] for sample in dataset.samples)
-    print(
-        "Dataset summary: \n"
-        f"    Dataset size: {len(dataset)}"
-        f"    Class balance:"
-    )
+    logger.info("Summarizing dataset")
+    logger.debug(f"Dataset size: {len(dataset)}")
+    class_balance_str = "Class balance:"
     for emotion_idx in range(8):
         count = class_counts.get(emotion_idx, 0)
         ratio = count / len(dataset)
-        print(f"    Class {emotion_idx}: {count} samples ({ratio:.2%})")
+        class_balance_str += (
+            f"\n    Class {emotion_idx}: {count} samples ({ratio:.2%})"
+        )
+    logger.debug(class_balance_str)

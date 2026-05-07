@@ -1,4 +1,5 @@
 import copy
+import logging
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,8 +18,9 @@ from psychic.model import (
     model_capacity_check,
     evaluate,
     calculate_confusion_matrix,
-    display_confusion_matrix,
 )
+
+logger = logging.getLogger("psychic")
 
 
 def run():
@@ -27,6 +29,7 @@ def run():
     g = torch.Generator()
     g.manual_seed(456)
 
+    logger.info("Loading data")
     # load data
     dataset = RavdessAudioDataset(transform=transform())
     dataset_summary(dataset)
@@ -49,6 +52,7 @@ def run():
     # data, meta = next(iter(dataloader))
     # plot_spectrogram(data[0][0], {k: v[0] for k, v in meta.items()})
 
+    logger.info("Defining model parameters")
     # modeling
     model = CNN()
     inspect_model(model)
@@ -57,8 +61,8 @@ def run():
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     loss_fn = nn.CrossEntropyLoss()
     # TODO increase epochs
-    epochs = 10
-    early_stopping_patience = 3
+    epochs = 30
+    early_stopping_patience = 5
 
     # keep history of model training
     model_history = {
@@ -76,6 +80,7 @@ def run():
     best_model_state = copy.deepcopy(model.state_dict())
     epochs_without_improvement = 0
 
+    logger.info("Starting training loop")
     # training loop
     model.train()
     for epoch in range(1, epochs + 1):
@@ -115,7 +120,7 @@ def run():
         model_history["val_acc"].append(val_acc)
 
         # if epoch % 10 == 0:
-        print(
+        logger.debug(
             f"Epoch {epoch}: Train Loss = {avg_train_loss:.4f} / "
             f"Train Acc = {train_acc:.4f} / "
             f"Val Loss = {avg_val_loss:.4f} / "
@@ -138,7 +143,7 @@ def run():
             epochs_without_improvement += 1
 
         if epochs_without_improvement >= early_stopping_patience:
-            print(
+            logger.debug(
                 f"Early stopping at epoch {epoch}. "
                 f"No improvement for {epochs_without_improvement} epochs. "
                 f"Best epoch was {best_epoch}."
@@ -146,8 +151,7 @@ def run():
             break
 
     # pick best model
-    model.load_state_dict(best_model_state)
-    print(
+    logger.info(
         f"Restored best model from epoch {best_epoch} "
         "with best performance: \n"
         f"    Train Loss = {best_train_loss:.4f} / "
@@ -155,13 +159,16 @@ def run():
         f"Val Loss = {best_val_loss:.4f} / "
         f"Val Acc = {best_val_acc:.4f} / "
     )
+    model.load_state_dict(best_model_state)
 
     # final test. test model with test set
     avg_test_loss, test_acc, test_labels, test_predictions = evaluate(
         model, test_dataloader, loss_fn
     )
-    print(f"Final Test: Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f}")
-    test_confusion_matrix = calculate_confusion_matrix(
-        test_labels, test_predictions, num_classes=8
+    logger.info(
+        "Final test with testset: "
+        f"Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f}"
     )
-    display_confusion_matrix(test_confusion_matrix, ID_EMOTION_MAPPER)
+    _ = calculate_confusion_matrix(
+        test_labels, test_predictions, 8, ID_EMOTION_MAPPER
+    )
