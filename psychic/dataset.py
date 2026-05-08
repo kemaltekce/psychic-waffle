@@ -341,3 +341,28 @@ def dataset_summary(dataset: RavdessAudioDataset) -> None:
             f"\n    Class {emotion_idx}: {count} samples ({ratio:.2%})"
         )
     logger.debug(class_balance_str)
+
+
+def build_class_weights(dataset: RavdessAudioDataset) -> torch.Tensor:
+    """
+    Create inverse-frequency class weights from a dataset split.
+
+    Args:
+        dataset: Dataset split used for training.
+    """
+    logger.info("Calculating class weights")
+    counts = Counter(sample["emotion"] for sample in dataset.samples)
+    num_classes = len(counts.keys())
+    total_samples = len(dataset)
+    weights = []
+    for class_idx in range(num_classes):
+        class_count = counts.get(class_idx, 0)
+        if class_count == 0:
+            weights.append(0.0)
+        else:
+            weights.append(total_samples / (num_classes * class_count))
+    class_weights = torch.tensor(weights, dtype=torch.float32)
+    logger.debug(
+        f"Using the following class weights: {class_weights.tolist()}"
+    )
+    return class_weights

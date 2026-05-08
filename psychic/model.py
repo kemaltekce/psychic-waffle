@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Dict, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -17,45 +17,75 @@ class CNN(nn.Module):
         self,
         conv1_out_channels: int = 16,
         conv2_out_channels: int = 32,
-        hidden_dim1: int = 64,
-        hidden_dim2: int = 32,
+        conv3_out_channels: int = 64,
+        conv4_out_channels: int = 128,
+        avg_pool_dim: Tuple[int, int] = (4, 4),
+        hidden_dim: int = 64,
         output_dim: int = 8,
-        dropout_p: float = 0.3,
+        dropout_p: float = 0.2,
     ) -> None:
         super().__init__()
-        # the image size is 64*301 and we have two pooling layers
-        flattened_dim = conv2_out_channels * 16 * 75
 
         self.features = nn.Sequential(
+            # layer 1
             nn.Conv2d(
                 in_channels=1,
                 out_channels=conv1_out_channels,
                 kernel_size=3,
                 padding=1,
+                bias=False,
             ),
+            nn.BatchNorm2d(conv1_out_channels),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2),
-            nn.Dropout2d(p=dropout_p),
+            # layer 2
             nn.Conv2d(
                 in_channels=conv1_out_channels,
                 out_channels=conv2_out_channels,
                 kernel_size=3,
                 padding=1,
+                bias=False,
             ),
+            nn.BatchNorm2d(conv2_out_channels),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2),
+            # layer 3
+            nn.Conv2d(
+                in_channels=conv2_out_channels,
+                out_channels=conv3_out_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(conv3_out_channels),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2),
+            # layer 4
+            nn.Conv2d(
+                in_channels=conv3_out_channels,
+                out_channels=conv4_out_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(conv4_out_channels),
+            nn.ReLU(),
             nn.Dropout2d(p=dropout_p),
+            # adaptive pooling to reduce highly dense connection to neural
+            # network. main logic should be learnt in conv layers not in the
+            # dense layers
+            nn.AdaptiveAvgPool2d(avg_pool_dim),
         )
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(flattened_dim, hidden_dim1),
+            nn.Linear(
+                conv4_out_channels * avg_pool_dim[0] * avg_pool_dim[1],
+                hidden_dim,
+            ),
             nn.ReLU(),
             nn.Dropout(p=dropout_p),
-            nn.Linear(hidden_dim1, hidden_dim2),
-            nn.ReLU(),
-            nn.Dropout(p=dropout_p),
-            nn.Linear(hidden_dim2, output_dim),
+            nn.Linear(hidden_dim, output_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -92,9 +122,9 @@ def inspect_model(model: nn.Module):
     )
     model_size = (param_size_bytes + buffer_size_bytes) / 1024**2
     logger.debug(
-        "Model specs:"
-        f"Total params: {total_params} \\ "
-        f"Trainable params: {trainable_params} \\ "
+        "Model specs - "
+        f"Total params= {total_params:_} \\ "
+        f"Trainable params: {trainable_params:_} \\ "
         f"Model size (MB): {model_size:.2f}"
     )
 

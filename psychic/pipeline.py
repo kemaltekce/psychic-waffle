@@ -1,12 +1,14 @@
 import copy
 import logging
 import numpy as np
+from collections import Counter
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from psychic.dataset import (
+    build_class_weights,
     RavdessAudioDataset,
     ID_EMOTION_MAPPER,
     dataset_summary,
@@ -58,10 +60,20 @@ def run():
     inspect_model(model)
     model_capacity_check(model, len(train_dataset))
     learning_rate = 0.001
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    loss_fn = nn.CrossEntropyLoss()
-    # TODO increase epochs
-    epochs = 30
+    # AdamW instead of Adam to keep weights small to generalize better
+    optimizer = optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=1e-4
+    )
+    # use scheduler to adjust learning rate to avoid validation acc oszilations
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="max",
+        factor=0.5,
+        patience=2,
+    )
+    class_weights = build_class_weights(train_dataset)
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+    epochs = 50
     early_stopping_patience = 5
 
     # keep history of model training
@@ -112,6 +124,8 @@ def run():
 
         # validation check
         avg_val_loss, val_acc, _, _ = evaluate(model, val_dataloader, loss_fn)
+        # inform scheduler to maybe adujst learning rate for next epoch
+        scheduler.step(val_acc)
 
         # save model history
         model_history["loss"].append(avg_train_loss)

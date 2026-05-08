@@ -11,6 +11,11 @@ def define_logging():
     coloredlogs.install(
         level=logging.DEBUG,
         fmt=LOG_FORMAT,
+        field_styles={
+            "asctime": {"color": "green"},
+            "name": {"color": "blue"},
+            "levelname": {"color": "black", "bright": True},
+        },
     )
     # Disable some third-party noise
     logging.getLogger("numexpr").setLevel(logging.WARNING)
