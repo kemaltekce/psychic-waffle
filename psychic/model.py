@@ -20,9 +20,10 @@ class CNN(nn.Module):
         conv3_out_channels: int = 64,
         conv4_out_channels: int = 128,
         avg_pool_dim: Tuple[int, int] = (4, 4),
-        hidden_dim: int = 64,
+        hidden_dim1: int = 64,
+        hidden_dim2: int = 32,
         output_dim: int = 8,
-        dropout_p: float = 0.2,
+        dropout_p: float = 0.1,
     ) -> None:
         super().__init__()
 
@@ -31,7 +32,7 @@ class CNN(nn.Module):
             nn.Conv2d(
                 in_channels=1,
                 out_channels=conv1_out_channels,
-                kernel_size=3,
+                kernel_size=4,
                 padding=1,
                 bias=False,
             ),
@@ -42,7 +43,7 @@ class CNN(nn.Module):
             nn.Conv2d(
                 in_channels=conv1_out_channels,
                 out_channels=conv2_out_channels,
-                kernel_size=3,
+                kernel_size=4,
                 padding=1,
                 bias=False,
             ),
@@ -53,7 +54,7 @@ class CNN(nn.Module):
             nn.Conv2d(
                 in_channels=conv2_out_channels,
                 out_channels=conv3_out_channels,
-                kernel_size=3,
+                kernel_size=4,
                 padding=1,
                 bias=False,
             ),
@@ -64,7 +65,7 @@ class CNN(nn.Module):
             nn.Conv2d(
                 in_channels=conv3_out_channels,
                 out_channels=conv4_out_channels,
-                kernel_size=3,
+                kernel_size=4,
                 padding=1,
                 bias=False,
             ),
@@ -81,11 +82,17 @@ class CNN(nn.Module):
             nn.Flatten(),
             nn.Linear(
                 conv4_out_channels * avg_pool_dim[0] * avg_pool_dim[1],
-                hidden_dim,
+                hidden_dim1,
             ),
             nn.ReLU(),
             nn.Dropout(p=dropout_p),
-            nn.Linear(hidden_dim, output_dim),
+            nn.Linear(
+                hidden_dim1,
+                hidden_dim2,
+            ),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+            nn.Linear(hidden_dim2, output_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -224,6 +224,13 @@ def transform(
     win_length: int = 400,
     hop_length: int = 160,
     eps: float = 1e-8,
+    max_shift_ms: float = 50.0,
+    noise_std_range: Tuple[float, float] = (0.0, 0.002),
+    gain_range: Tuple[float, float] = (1.0, 1.0),
+    num_time_masks: int = 0,
+    max_time_mask_pct: float = 0.01,
+    num_freq_masks: int = 0,
+    max_freq_mask_bins: int = 1,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Build a preprocessing function for audio data/wavefroms.
@@ -248,28 +255,81 @@ def transform(
         Step size, in samples, between consecutive frames.
     eps:
         Small constant used to avoid division by zero during normalization.
+    max_shift_ms:
+        Maximum random temporal shift, in milliseconds, to wavefrom
+    noise_std_range:
+        Range to add Gaussian noise standard deviation to waveform
+    gain_range:
+        Inclusive range to sample waveform amplitude gain.
+    num_time_masks:
+        Number of time masks to apply to the spectrogram.
+    max_time_mask_pct:
+        Maximum width of each time mask as a fraction of total time frames.
+    num_freq_masks:
+        Number of frequency masks to apply to the spectrogram.
+    max_freq_mask_bins:
+        Maximum width of each frequency mask, measured in mel bins.
     """
+    # TODO add assert for every arg. eg no negative value
+
     target_num_samples = int(sample_rate * duration_sec)
+    max_shift_samples = int(sample_rate * max_shift_ms / 1000.0)
 
     def apply(waveform: torch.Tensor) -> torch.Tensor:
 
         # TODO add assert waveform not empty and size
 
-        # Force a fixed-length input so every sample produces the same shape.
+        # augment waveform data. time shift, noise and gain jitter
+        # Randomly time shift speech
+        shift = int(
+            torch.randint(
+                -max_shift_samples,
+                max_shift_samples + 1,
+                (1,),
+            ).item()
+        )
+        if shift > 0:
+            waveform = torch.nn.functional.pad(waveform[:-shift], (shift, 0))
+        elif shift < 0:
+            waveform = torch.nn.functional.pad(waveform[-shift:], (0, -shift))
+
+        # add noise
+        noise_low, noise_high = noise_std_range
+        noise_std = torch.empty(1).uniform_(noise_low, noise_high).item()
+        waveform = waveform + torch.randn_like(waveform) * noise_std
+
+        # add gain gitter
+        gain_low, gain_high = gain_range
+        gain = torch.empty(1).uniform_(gain_low, gain_high).item()
+        waveform = waveform * gain
+
+        # randomly trimming and padding probably best for real life situation
+        # randomly trim and pad data.
         if waveform.numel() < target_num_samples:
             pad_amount = target_num_samples - waveform.numel()
-            waveform = torch.nn.functional.pad(waveform, (0, pad_amount))
+            left_pad = int(torch.randint(0, pad_amount + 1, (1,)).item())
+            right_pad = pad_amount - left_pad
+            waveform = torch.nn.functional.pad(waveform, (left_pad, right_pad))
         else:
             trim_amount = waveform.numel() - target_num_samples
-            left_trim = trim_amount // 2
+            left_trim = torch.randint(0, trim_amount + 1, (1,)).item()
             right_trim = left_trim + target_num_samples
             waveform = waveform[left_trim:right_trim]
-
-        # TODO normalizing wavefrom could remove important information.
-        # Scale amplitudes into a stable range without changing silence.
-        peak = waveform.abs().max()
-        if peak > 0:
-            waveform = waveform / peak
+        # pad at end and trim symatrically
+        # if waveform.numel() < target_num_samples:
+        #     pad_amount = target_num_samples - waveform.numel()
+        #     waveform = torch.nn.functional.pad(waveform, (0, pad_amount))
+        # else:
+        #     trim_amount = waveform.numel() - target_num_samples
+        #     left_trim = trim_amount // 2
+        #     right_trim = left_trim + target_num_samples
+        #     waveform = waveform[left_trim:right_trim]
+        #
+        # # TODO normalizing wavefrom could remove important information.
+        # # Scale amplitudes into a stable range without changing silence.
+        # peak = waveform.abs().max()
+        # if peak > 0:
+        #     waveform = waveform / peak
 
         # Convert the waveform into a compact time-frequency representation.
         mel_spectrogram = librosa.feature.melspectrogram(
@@ -292,7 +352,37 @@ def transform(
             spectrogram.std() + eps
         )
 
-        # TODO add asserts
+        # augment spectogram. time and frequency mask
+        # time mask
+        # TODO assert if spectrogram too small. max time mask frames
+        # should be greater than 1 and smaller than spectrogram
+        max_time_mask_frames = int(spectrogram.size(1) * max_time_mask_pct)
+        for _ in range(num_time_masks):
+            mask_width = torch.randint(
+                0, max_time_mask_frames + 1, (1,)
+            ).item()
+            if mask_width == 0:
+                continue
+            start = torch.randint(
+                0, int(spectrogram.size(1) - mask_width + 1), (1,)
+            ).item()
+            spectrogram[:, start : start + mask_width] = 0.0
+
+        # freq mask
+        # TODO assert max_freq_mask_bins should be smaller than
+        # spectogram.size(0)
+        for _ in range(num_freq_masks):
+            mask_height = torch.randint(0, max_freq_mask_bins + 1, (1,)).item()
+            if mask_height == 0:
+                continue
+            start = torch.randint(
+                0, int(spectrogram.size(0) - mask_height + 1), (1,)
+            ).item()
+            spectrogram[start : start + mask_height, :] = 0.0
+
+        # plot_spectrogram(spectrogram, {"emotion": 0, "actor": 0})
+
+        # TODO add asserts regarding final spectogram
 
         return spectrogram
 

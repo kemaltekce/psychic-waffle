@@ -1,7 +1,6 @@
 import copy
 import logging
 import numpy as np
-from collections import Counter
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -73,7 +72,7 @@ def run():
     )
     class_weights = build_class_weights(train_dataset)
     loss_fn = nn.CrossEntropyLoss(weight=class_weights)
-    epochs = 50
+    epochs = 100
     early_stopping_patience = 5
 
     # keep history of model training
