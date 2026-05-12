@@ -209,6 +209,59 @@ def evaluate(
     )
 
 
+def calculate_f1_score(
+    labels: torch.Tensor,
+    predictions: torch.Tensor,
+    num_classes: int,
+) -> float:
+    """
+    Calculate macro F1 score for multiclass classification.
+
+    Args:
+        labels: Ground-truth class ids for each evaluated sample.
+        predictions: Predicted class ids for each evaluated sample.
+        num_classes: Number of classes included in the task.
+
+    Returns:
+        Macro-averaged F1 score across all classes.
+    """
+    # TODO add asserts
+    f1_scores = []
+    for class_idx in range(num_classes):
+        true_positive = (
+            ((predictions == class_idx) & (labels == class_idx)).sum().item()
+        )
+        false_positive = (
+            ((predictions == class_idx) & (labels != class_idx)).sum().item()
+        )
+        false_negative = (
+            ((predictions != class_idx) & (labels == class_idx)).sum().item()
+        )
+
+        precision_denominator = true_positive + false_positive
+        recall_denominator = true_positive + false_negative
+        precision = (
+            true_positive / precision_denominator
+            if precision_denominator > 0
+            else 0.0
+        )
+        recall = (
+            true_positive / recall_denominator
+            if recall_denominator > 0
+            else 0.0
+        )
+        f1_denominator = precision + recall
+        f1_scores.append(
+            2 * precision * recall / f1_denominator
+            if f1_denominator > 0
+            else 0.0
+        )
+
+    # TODO add asserts
+
+    return sum(f1_scores) / num_classes
+
+
 def calculate_confusion_matrix(
     labels: torch.Tensor,
     predictions: torch.Tensor,

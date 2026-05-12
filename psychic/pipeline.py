@@ -1,5 +1,6 @@
 import copy
 import logging
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -18,10 +19,78 @@ from psychic.model import (
     inspect_model,
     model_capacity_check,
     evaluate,
+    calculate_f1_score,
     calculate_confusion_matrix,
 )
 
 logger = logging.getLogger("psychic")
+
+
+def plot_training_history(
+    model_history: dict[str, list[float]],
+    best_epoch: int,
+    test_acc: float,
+    test_f1: float,
+) -> None:
+    """
+    Plot accuracy and F1 score history for train and validation sets.
+
+    Args:
+        model_history: Recorded metric values for each epoch.
+        best_epoch: Epoch selected as best during training.
+        test_acc: Final test accuracy of the restored best model.
+        test_f1: Final test macro F1 of the restored best model.
+    """
+    epochs = range(1, len(model_history["train_acc"]) + 1)
+    best_epoch_idx = best_epoch - 1
+    plt.figure(figsize=(10, 5))
+    plt.plot(
+        epochs,
+        model_history["train_acc"],
+        color="royalblue",
+        label=(
+            "Train Accuracy "
+            f"(best: {model_history['train_acc'][best_epoch_idx]:.4f})"
+        ),
+    )
+    plt.plot(
+        epochs,
+        model_history["train_f1"],
+        color="skyblue",
+        label=(
+            "Train F1 "
+            f"(best: {model_history['train_f1'][best_epoch_idx]:.4f})"
+        ),
+    )
+    plt.plot(
+        epochs,
+        model_history["val_acc"],
+        color="darkorange",
+        label=(
+            "Val Accuracy "
+            f"(best: {model_history['val_acc'][best_epoch_idx]:.4f})"
+        ),
+    )
+    plt.plot(
+        epochs,
+        model_history["val_f1"],
+        color="peachpuff",
+        label=(
+            "Val F1 " f"(best: {model_history['val_f1'][best_epoch_idx]:.4f})"
+        ),
+    )
+    plt.axvline(best_epoch, color="red", alpha=0.5, label="Best Epoch")
+    plt.title(
+        "Training History "
+        f"(Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f})"
+    )
+    plt.xlabel("Epoch")
+    plt.ylabel("Score")
+    plt.ylim(0.0, 1.0)
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 
 def run():
@@ -46,6 +115,7 @@ def run():
     test_dataloader = DataLoader(
         test_dataset, batch_size=16, shuffle=False, generator=g
     )
+    num_classes = len(ID_EMOTION_MAPPER)
 
     # dataloader = DataLoader(
     #     dataset, batch_size=32, shuffle=True, generator=g
@@ -79,13 +149,17 @@ def run():
     model_history = {
         "loss": [],
         "train_acc": [],
+        "train_f1": [],
         "val_loss": [],
         "val_acc": [],
+        "val_f1": [],
     }
     # track model validation performance for early stopping and best model
     best_train_acc = 0.0
+    best_train_f1 = 0.0
     best_train_loss = float("inf")
     best_val_acc = 0.0
+    best_val_f1 = 0.0
     best_val_loss = float("inf")
     best_epoch = 0
     best_model_state = copy.deepcopy(model.state_dict())
@@ -98,6 +172,8 @@ def run():
         total_loss = 0
         total = 0
         correct = 0
+        train_labels = []
+        train_predictions = []
 
         # train model
         for data, meta in train_dataloader:
@@ -113,6 +189,8 @@ def run():
             # softmax unnecessary for code but here for debugging purposes
             probability = torch.softmax(prediction, dim=1)
             probability_pred = probability.argmax(dim=1)
+            train_labels.append(labels.detach())
+            train_predictions.append(probability_pred.detach())
             correct += (probability_pred == labels).sum().item()
             # corss entropy loss is mean value. multiply by size to calculate
             # unskewed average with total later
@@ -120,24 +198,36 @@ def run():
 
         train_acc = correct / total
         avg_train_loss = total_loss / total
+        train_f1 = calculate_f1_score(
+            torch.cat(train_labels),
+            torch.cat(train_predictions),
+            num_classes,
+        )
 
         # validation check
-        avg_val_loss, val_acc, _, _ = evaluate(model, val_dataloader, loss_fn)
+        avg_val_loss, val_acc, val_labels, val_predictions = evaluate(
+            model, val_dataloader, loss_fn
+        )
+        val_f1 = calculate_f1_score(val_labels, val_predictions, num_classes)
         # inform scheduler to maybe adujst learning rate for next epoch
         scheduler.step(val_acc)
 
         # save model history
         model_history["loss"].append(avg_train_loss)
         model_history["train_acc"].append(train_acc)
+        model_history["train_f1"].append(train_f1)
         model_history["val_loss"].append(avg_val_loss)
         model_history["val_acc"].append(val_acc)
+        model_history["val_f1"].append(val_f1)
 
         # if epoch % 10 == 0:
         logger.debug(
             f"Epoch {epoch}: Train Loss = {avg_train_loss:.4f} / "
             f"Train Acc = {train_acc:.4f} / "
+            f"Train F1 = {train_f1:.4f} / "
             f"Val Loss = {avg_val_loss:.4f} / "
             f"Val Acc = {val_acc:.4f} / "
+            f"Val F1 = {val_f1:.4f}"
         )
 
         # validation data for early stopping and model selection
@@ -146,8 +236,10 @@ def run():
         )
         if validation_improved:
             best_train_acc = train_acc
+            best_train_f1 = train_f1
             best_train_loss = avg_train_loss
             best_val_acc = val_acc
+            best_val_f1 = val_f1
             best_val_loss = avg_val_loss
             best_epoch = epoch
             best_model_state = copy.deepcopy(model.state_dict())
@@ -169,8 +261,10 @@ def run():
         "with best performance: \n"
         f"    Train Loss = {best_train_loss:.4f} / "
         f"Train Acc = {best_train_acc:.4f} / "
+        f"Train F1 = {best_train_f1:.4f} / "
         f"Val Loss = {best_val_loss:.4f} / "
         f"Val Acc = {best_val_acc:.4f} / "
+        f"Val F1 = {best_val_f1:.4f}"
     )
     model.load_state_dict(best_model_state)
 
@@ -178,10 +272,13 @@ def run():
     avg_test_loss, test_acc, test_labels, test_predictions = evaluate(
         model, test_dataloader, loss_fn
     )
+    test_f1 = calculate_f1_score(test_labels, test_predictions, num_classes)
     logger.info(
         "Final test with testset: "
-        f"Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f}"
+        f"Loss = {avg_test_loss:.4f} / Acc = {test_acc:.4f} / "
+        f"F1 = {test_f1:.4f}"
     )
     _ = calculate_confusion_matrix(
-        test_labels, test_predictions, 8, ID_EMOTION_MAPPER
+        test_labels, test_predictions, num_classes, ID_EMOTION_MAPPER
     )
+    plot_training_history(model_history, best_epoch, test_acc, test_f1)
