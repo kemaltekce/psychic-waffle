@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import random
+import subprocess
+
+from psychic.dataset import ID_EMOTION_MAPPER, RavdessAudioDataset
+
+DISPLAY_TO_DATASET_EMOTION = {
+    display_id: dataset_id
+    for display_id, dataset_id in enumerate(sorted(ID_EMOTION_MAPPER), start=1)
+}
+DATASET_TO_DISPLAY_EMOTION = {
+    dataset_id: display_id
+    for display_id, dataset_id in DISPLAY_TO_DATASET_EMOTION.items()
+}
+
+
+def prompt_test_size(max_files: int) -> int:
+    while True:
+        raw_value = input(
+            f"How many files do you want to test? (1-{max_files}): "
+        )
+        try:
+            num_files = int(raw_value)
+        except ValueError:
+            print("Please enter a whole number.")
+            continue
+
+        if 1 <= num_files <= max_files:
+            return num_files
+
+        print(f"Please enter a number between 1 and {max_files}.")
+
+
+def prompt_emotion() -> int | str:
+    valid_choices = set(DISPLAY_TO_DATASET_EMOTION)
+
+    while True:
+        raw_value = input(
+            "Which emotion is displayed? Enter the number or 'replay': "
+        ).strip()
+
+        if raw_value.lower() == "replay":
+            return "replay"
+
+        try:
+            choice = int(raw_value)
+        except ValueError:
+            print("Please enter one of the listed numbers or 'replay'.")
+            continue
+
+        if choice in valid_choices:
+            return choice
+
+        valid_text = ", ".join(str(choice) for choice in sorted(valid_choices))
+        print(f"Please enter one of: {valid_text}.")
+
+
+def play_audio(path: str) -> None:
+    try:
+        subprocess.run(["afplay", path], check=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "The 'afplay' command was not found. "
+            "This script currently expects macOS audio playback."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Could not play audio file: {path}") from exc
+
+
+def format_result_line(index: int, answer: dict) -> str:
+    actual_label = ID_EMOTION_MAPPER[answer["actual_emotion"]]
+    guessed_label = ID_EMOTION_MAPPER[answer["user_emotion"]]
+    correctness = "correct" if answer["correct"] else "incorrect"
+    actual_number = DATASET_TO_DISPLAY_EMOTION[answer["actual_emotion"]]
+    guessed_number = DATASET_TO_DISPLAY_EMOTION[answer["user_emotion"]]
+    return (
+        f"{index:02d}. "
+        f"{f'guessed {guessed_label} ({guessed_number})':<28} / "
+        f"{f'actual {actual_label} ({actual_number})':<28} -> "
+        f"{correctness}"
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Estimate human-level performance on the RAVDESS dataset."
+    )
+    parser.add_argument(
+        "--feedback",
+        action="store_true",
+        help="Show immediate feedback after each guess.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    dataset = RavdessAudioDataset()
+
+    if not dataset.samples:
+        raise RuntimeError("No RAVDESS samples were found.")
+
+    num_files = prompt_test_size(len(dataset))
+
+    print("Starting speech emotion test")
+    for display_id, dataset_id in DISPLAY_TO_DATASET_EMOTION.items():
+        emotion = ID_EMOTION_MAPPER[dataset_id]
+        print(f"{emotion} ({display_id})")
+
+    selected_samples = random.sample(dataset.samples, k=num_files)
+    answers = []
+
+    for index, sample in enumerate(selected_samples, start=1):
+        print(f"\nSample {index}/{num_files}")
+        play_audio(sample["path"])
+
+        while True:
+            user_choice = prompt_emotion()
+            if user_choice == "replay":
+                play_audio(sample["path"])
+                continue
+            break
+
+        actual_emotion = sample["emotion"]
+        user_emotion = DISPLAY_TO_DATASET_EMOTION[int(user_choice)]
+
+        answers.append(
+            {
+                "path": sample["path"],
+                "actual_emotion": actual_emotion,
+                "user_emotion": user_emotion,
+                "correct": user_emotion == actual_emotion,
+            }
+        )
+        if args.feedback:
+            print(format_result_line(index, answers[-1]))
+
+    correct_answers = sum(answer["correct"] for answer in answers)
+    accuracy = correct_answers / num_files
+
+    print("\nFiles")
+    for index, answer in enumerate(answers, start=1):
+        print(f"{index:02d}. {answer['path']}")
+
+    print("\nResults")
+    for index, answer in enumerate(answers, start=1):
+        print(format_result_line(index, answer))
+
+    print(
+        f"\nHuman level performance accuracy: "
+        f"{correct_answers}/{num_files} ({accuracy:.2%})"
+    )
+
+
+if __name__ == "__main__":
+    main()
