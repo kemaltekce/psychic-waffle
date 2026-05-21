@@ -4,5 +4,8 @@ psychic_waffle.egg-info
 pyrightconfig.json
 data/*
 !data/.gitkeep
-
+models/*
+!models/.gitkeep
+to_predict/*
+!to_predict/.gitkeep
 

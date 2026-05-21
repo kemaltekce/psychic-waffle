@@ -15,7 +15,7 @@ from psychic.dataset import (
     transform,
 )
 from psychic.model import (
-    CNN,
+    get_model,
     inspect_model,
     model_capacity_check,
     evaluate,
@@ -93,7 +93,7 @@ def plot_training_history(
     plt.show()
 
 
-def run():
+def run() -> nn.Module:
     # define seed for reproducebility
     torch.manual_seed(456)
     g = torch.Generator()
@@ -125,7 +125,7 @@ def run():
 
     logger.info("Defining model parameters")
     # modeling
-    model = CNN()
+    model = get_model()
     inspect_model(model)
     model_capacity_check(model, len(train_dataset))
     learning_rate = 0.001
@@ -281,4 +281,5 @@ def run():
     _ = calculate_confusion_matrix(
         test_labels, test_predictions, num_classes, ID_EMOTION_MAPPER
     )
-    plot_training_history(model_history, best_epoch, test_acc, test_f1)
+    # plot_training_history(model_history, best_epoch, test_acc, test_f1)
+    return model
