@@ -8,4 +8,5 @@ models/*
 !models/.gitkeep
 to_predict/*
 !to_predict/.gitkeep
+.DS_Store
 
