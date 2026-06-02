@@ -53,6 +53,8 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
         action="store_true",
         help="Predict all supported audio files from the to_predict folder.",
     )
+    # TODO add --model-expects for prediction to define if model expects
+    # audio or spectrogram
     return parser, parser.parse_args()
 
 
@@ -93,7 +95,8 @@ def main() -> None:
         model = load_latest_model()
 
     if args.predict and model is not None:
-        predict_folder(model)
+        # TODO use --model-expects here
+        predict_folder(model, data="spectrogram")
 
 
 if __name__ == "__main__":

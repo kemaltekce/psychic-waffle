@@ -99,9 +99,23 @@ def run() -> nn.Module:
     g = torch.Generator()
     g.manual_seed(456)
 
+    # dataloader = DataLoader(
+    #     dataset, batch_size=32, shuffle=True, generator=g
+    # )
+    # data, meta = next(iter(dataloader))
+    # plot_spectrogram(data[0][0], {k: v[0] for k, v in meta.items()})
+
+    logger.info("Loading model architecture")
+    # modeling
+    model = get_model()
+
     logger.info("Loading data")
     # load data
-    dataset = RavdessAudioDataset(transform=transform())
+    dataset = RavdessAudioDataset(
+        transform=transform(
+            to_spectrogram=model.NEEDS_SPECTROGRAM  # type: ignore
+        )
+    )
     dataset_summary(dataset)
     train_dataset = dataset.subset_actors(list(range(1, 19)))
     val_dataset = dataset.subset_actors(list(range(19, 22)))
@@ -117,18 +131,9 @@ def run() -> nn.Module:
     )
     num_classes = len(ID_EMOTION_MAPPER)
 
-    # dataloader = DataLoader(
-    #     dataset, batch_size=32, shuffle=True, generator=g
-    # )
-    # data, meta = next(iter(dataloader))
-    # plot_spectrogram(data[0][0], {k: v[0] for k, v in meta.items()})
-
-    logger.info("Defining model parameters")
-    # modeling
-    model = get_model()
     inspect_model(model)
     model_capacity_check(model, len(train_dataset))
-    learning_rate = 0.0003
+    learning_rate = 0.001
     # AdamW instead of Adam to keep weights small to generalize better
     optimizer = optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=1e-4

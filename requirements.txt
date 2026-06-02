@@ -141,6 +141,8 @@ torch==2.11.0
     # via
     #   psychic-waffle (pyproject.toml)
     #   torchvision
+torchaudio==2.11.0
+    # via psychic-waffle (pyproject.toml)
 torchvision==0.26.0
     # via psychic-waffle (pyproject.toml)
 typing-extensions==4.15.0

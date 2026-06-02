@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+import torchaudio
 from torchvision.models import ResNet18_Weights, resnet18
 
 from psychic.dataset import ID_EMOTION_MAPPER
@@ -17,7 +18,7 @@ MODELS_DIR = Path("models")
 TO_PREDICT_DIR = Path("to_predict")
 MODEL_FILE_PATTERN = "*.pt"
 SUPPORTED_AUDIO_EXTENSIONS = [".wav"]
-CURRENT_MODEL = "ResNet18TransferModel"
+CURRENT_MODEL = "CNN"
 
 
 def _as_2_tuple(value: tuple[int, ...]) -> Tuple[int, int]:
@@ -35,6 +36,8 @@ class CNN(nn.Module):
     Convolutional Neural Network for classifying spectrograms into the
     8 RAVDESS emotions.
     """
+
+    NEEDS_SPECTROGRAM = True
 
     def __init__(
         self,
@@ -137,6 +140,8 @@ class ResNet18TransferModel(nn.Module):
     spectrogram tensors.
     """
 
+    NEEDS_SPECTROGRAM = True
+
     def __init__(
         self,
         output_dim: int = 8,
@@ -198,6 +203,82 @@ class ResNet18TransferModel(nn.Module):
         assert layer is not None, "layer should be nn.Module or nn.Sequential"
 
         return layer
+
+
+class Wav2Vec2CNN(nn.Module):
+    """
+    Wav2Vec2 transfer-learning model followed by a 1D CNN classifier.
+
+    Expected input is raw mono audio with shape
+    `(batch, 1, samples)`. The Wav2Vec2 backbone produces an embedding
+    sequence, which is passed through temporal 1D convolutions and a dense
+    classifier. The forward pass returns logits.
+    """
+
+    NEEDS_SPECTROGRAM = False
+
+    def __init__(
+        self,
+        cnn_channels: Tuple[int, ...] = (256, 128),
+        kernel_size: int = 3,
+        padding: int = 1,
+        hidden_dim: int = 64,
+        output_dim: int = 8,
+        dropout_p: float = 0.2,
+    ) -> None:
+        super().__init__()
+
+        self.bundle = torchaudio.pipelines.WAV2VEC2_BASE
+        self.wav2vec2 = self.bundle.get_model()
+        # hidden dim of wav2vec2 base
+        wav2vec2_embedding_dim = 768
+
+        # freeze wav2vec2 and don't retrain it
+        for param in self.wav2vec2.parameters():
+            param.requires_grad = False
+
+        # build conv layers
+        conv_layers: list[nn.Module] = []
+        in_channels = wav2vec2_embedding_dim
+        for out_channels in cnn_channels:
+            conv_layers.extend(
+                [
+                    nn.Conv1d(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        padding=padding,
+                        bias=False,
+                    ),
+                    nn.BatchNorm1d(out_channels),
+                    nn.ReLU(),
+                    nn.Dropout(p=dropout_p),
+                ]
+            )
+            in_channels = out_channels
+
+        self.features = nn.Sequential(
+            *conv_layers,
+            nn.AdaptiveAvgPool1d(1),
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(in_channels, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO assert that the data has to be 3 dim with (batch, 1, samples)
+
+        x = x.squeeze(1)
+        with torch.no_grad():
+            embeddings, _ = self.wav2vec2.extract_features(x)  # type: ignore
+        embeddings = embeddings[-1]
+        x = embeddings.transpose(1, 2)
+        x = self.features(x)
+        return self.classifier(x)
 
 
 def get_model() -> nn.Module:
@@ -406,8 +487,9 @@ def calculate_confusion_matrix(
     return matrix
 
 
-def transfrom_waveform_to_spectogram(
+def transfrom_waveform(
     waveform: torch.Tensor,
+    to_spectogram: bool = True,
     sample_rate: int = 16_000,
     duration_sec: float = 3.0,
     n_mels: int = 64,
@@ -455,6 +537,9 @@ def transfrom_waveform_to_spectogram(
         right_trim = left_trim + target_num_samples
         waveform = waveform[left_trim:right_trim]
 
+    if not to_spectogram:
+        return waveform
+
     # Convert the waveform into a compact time-frequency representation.
     mel_spectrogram = librosa.feature.melspectrogram(
         y=waveform.numpy(),
@@ -487,8 +572,11 @@ def save_model(model: nn.Module, models_dir: Path = MODELS_DIR) -> Path:
     """
     logger.info("Saving model")
 
+    model_name = model.__class__.__name__
     models_dir.mkdir(parents=True, exist_ok=True)
-    model_path = models_dir / f"{datetime.now():%Y-%m-%d-%H%M%S}.pt"
+    model_path = (
+        models_dir / f"{datetime.now():%Y-%m-%d-%H%M%S}_{model_name}.pt"
+    )
     torch.save(model.state_dict(), model_path)
 
     logger.debug("Saved model to %s", model_path)
@@ -521,6 +609,7 @@ def load_latest_model(models_dir: Path = MODELS_DIR) -> nn.Module:
 def predict_folder(
     model: nn.Module,
     folder_path: Path = TO_PREDICT_DIR,
+    data: str = "spectrogram",
 ) -> dict[str, str]:
     """
     Predict emotions for all supported audio files in the prediction folder.
@@ -528,6 +617,8 @@ def predict_folder(
     # TODO add asserts
 
     logger.info("Predicting data from folder")
+
+    to_spectrogram = data == "spectrogram"
 
     if not folder_path.exists():
         raise FileNotFoundError(
@@ -557,7 +648,9 @@ def predict_folder(
                 mono=True,
             )
             waveform = torch.tensor(waveform_np, dtype=torch.float32)
-            features = transfrom_waveform_to_spectogram(waveform)
+            features = transfrom_waveform(
+                waveform, to_spectogram=to_spectrogram
+            )
             features = features.unsqueeze(0).unsqueeze(0)
             logits = model(features)
             prediction_id = int(

@@ -217,6 +217,7 @@ class RavdessAudioDataset(Dataset):
 
 
 def transform(
+    to_spectrogram: bool = True,
     sample_rate: int = 16_000,
     duration_sec: float = 3.0,
     n_mels: int = 64,
@@ -330,6 +331,9 @@ def transform(
         # peak = waveform.abs().max()
         # if peak > 0:
         #     waveform = waveform / peak
+
+        if not to_spectrogram:
+            return waveform
 
         # Convert the waveform into a compact time-frequency representation.
         mel_spectrogram = librosa.feature.melspectrogram(
