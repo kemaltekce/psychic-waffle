@@ -128,7 +128,7 @@ def run() -> nn.Module:
     model = get_model()
     inspect_model(model)
     model_capacity_check(model, len(train_dataset))
-    learning_rate = 0.001
+    learning_rate = 0.0003
     # AdamW instead of Adam to keep weights small to generalize better
     optimizer = optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=1e-4

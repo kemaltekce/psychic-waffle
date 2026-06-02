@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torchvision.models import ResNet18_Weights, resnet18
 
 from psychic.dataset import ID_EMOTION_MAPPER
 
@@ -16,7 +17,17 @@ MODELS_DIR = Path("models")
 TO_PREDICT_DIR = Path("to_predict")
 MODEL_FILE_PATTERN = "*.pt"
 SUPPORTED_AUDIO_EXTENSIONS = [".wav"]
-CURRENT_MODEL = "CNN"
+CURRENT_MODEL = "ResNet18TransferModel"
+
+
+def _as_2_tuple(value: tuple[int, ...]) -> Tuple[int, int]:
+    return (value[0], value[1])
+
+
+def _as_2_tuple_or_str(value: str | tuple[int, ...]) -> Tuple[int, int] | str:
+    if isinstance(value, str):
+        return value
+    return (value[0], value[1])
 
 
 class CNN(nn.Module):
@@ -116,6 +127,79 @@ class CNN(nn.Module):
         return x
 
 
+class ResNet18TransferModel(nn.Module):
+    """
+    ResNet18 transfer-learning model for classifying spectrograms into the
+    8 RAVDESS emotions.
+
+    The pretrained ResNet18 model expects 3-channel image inputs, so the
+    first convolution is adapted to accept the project's single-channel
+    spectrogram tensors.
+    """
+
+    def __init__(
+        self,
+        output_dim: int = 8,
+        dropout_p: float = 0.2,
+        trainable_layers: Tuple[str, ...] = ("layer4",),
+    ) -> None:
+        super().__init__()
+
+        # load model architecture and weights
+        weights = ResNet18_Weights.DEFAULT
+        self.model = resnet18(weights=weights)
+
+        # adjust first layer to correct in channels
+        old_conv = self.model.conv1
+        self.model.conv1 = nn.Conv2d(
+            in_channels=1,
+            out_channels=old_conv.out_channels,
+            # use _as_2_tuple and _as_2_tuple_or_str to fix type warning
+            kernel_size=_as_2_tuple(old_conv.kernel_size),
+            stride=_as_2_tuple(old_conv.stride),
+            padding=_as_2_tuple_or_str(old_conv.padding),
+            bias=False,
+        )
+        with torch.no_grad():
+            self.model.conv1.weight.copy_(
+                old_conv.weight.mean(dim=1, keepdim=True)
+            )
+
+        # train first conv layer
+        for param in self.model.parameters():
+            param.requires_grad = False
+        for param in self.model.conv1.parameters():
+            param.requires_grad = True
+
+        # allow training of other layers
+        for layer_name in trainable_layers:
+            layer = self.get_layer(self.model, layer_name)
+            for param in layer.parameters():
+                param.requires_grad = True
+
+        # train last model layer
+        in_features = self.model.fc.in_features
+        self.model.fc = nn.Sequential(  # type: ignore
+            nn.Dropout(p=dropout_p),
+            nn.Linear(in_features, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
+
+    def get_layer(self, model: nn.Module, path: str) -> nn.Module:
+        layer = None
+        parts = path.split(".")
+        if len(parts) == 1:
+            layer = getattr(model, parts[0])
+        elif len(parts) == 2:
+            layer = getattr(model, parts[0])[int(parts[1])]
+
+        assert layer is not None, "layer should be nn.Module or nn.Sequential"
+
+        return layer
+
+
 def get_model() -> nn.Module:
     """
     Load currently defined model in CURRENT_MODEL.
@@ -167,12 +251,14 @@ def model_capacity_check(model: nn.Module, train_dataset_size: int) -> None:
     """
     logger.info("Checking model capacity")
     # TODO assert if model exists
-    total_params = sum(p.numel() for p in model.parameters())
-    params_per_train_sample = total_params / train_dataset_size
+    trainable_params = sum(
+        p.numel() for p in model.parameters() if p.requires_grad
+    )
+    params_per_train_sample = trainable_params / train_dataset_size
     if params_per_train_sample > 1_000:
         logger.warning(
-            "Capacity warning: this model is probably too large for the "
-            "RAVDESS train split and may overfit."
+            "Capacity warning: this model has probably too many trainable "
+            "parameters for the RAVDESS train split and may overfit."
         )
     else:
         logger.debug("Capacity check: model size looks reasonable.")
