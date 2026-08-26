@@ -9,4 +9,5 @@ models/*
 to_predict/*
 !to_predict/.gitkeep
 .DS_Store
+TASKS.md
 
