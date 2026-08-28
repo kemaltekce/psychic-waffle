@@ -14,13 +14,12 @@ data/**
 models/**
 !models/
 !models/.gitkeep
-to_predict/**
-!to_predict/
-!to_predict/.gitkeep
+predict/**
+!predict/
+!predict/.gitkeep
 .DS_Store
 .pytest_cache/
 .ruff_cache/
 .venv/
 TASKS.md
 legacy/**
-

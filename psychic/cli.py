@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import logging
+
+from psychic.logging import configure_logging
+
+logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,4 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Run the CLI."""
     parser = build_parser()
-    parser.parse_args()
+    args = parser.parse_args()
+    configure_logging()
+    logger.info("\U0001F680 Starting pipeline: %s", args.command)
