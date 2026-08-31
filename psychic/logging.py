@@ -1,7 +1,5 @@
 """Logging setup shared by command-line workflows."""
 
-from __future__ import annotations
-
 import logging
 
 import coloredlogs

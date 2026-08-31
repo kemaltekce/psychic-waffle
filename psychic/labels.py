@@ -1,7 +1,5 @@
 """Shared emotion labels and ids."""
 
-from __future__ import annotations
-
 EMOTION_LABELS: tuple[str, ...] = (
     "neutral",
     "calm",
@@ -19,4 +17,3 @@ ID_TO_EMOTION: dict[int, str] = {
 EMOTION_TO_ID: dict[str, int] = {
     label: emotion_id for emotion_id, label in ID_TO_EMOTION.items()
 }
-

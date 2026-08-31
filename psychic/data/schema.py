@@ -1,7 +1,5 @@
 """Common sample records produced by dataset-specific loaders."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,7 +20,7 @@ class AudioSample:
 
     sample_id: str
     dataset: str
-    source_path: Path
+    sample_path: Path
     emotion: str
     emotion_id: int
     speaker_id: str
@@ -41,7 +39,7 @@ class AudioSample:
 def validate_audio_sample(sample: AudioSample) -> None:
     """Assert the raw audio sample contract.
 
-    The source file must exist, the emotion label and id must match the shared
+    The sample file must exist, the emotion label and id must match the shared
     project taxonomy, and ids must be non-empty strings. Dataset-specific
     fields may live in `metadata`, but metadata keys must be strings so they
     can later be written into JSON manifests.
@@ -52,8 +50,8 @@ def validate_audio_sample(sample: AudioSample) -> None:
     assert (
         sample.dataset == sample.dataset.lower()
     ), "dataset must be lowercase"
-    assert isinstance(sample.source_path, Path), "source_path must be a Path"
-    assert sample.source_path.is_file(), "source_path must be an existing file"
+    assert isinstance(sample.sample_path, Path), "sample_path must be a Path"
+    assert sample.sample_path.is_file(), "sample_path must be an existing file"
     assert sample.emotion in EMOTION_TO_ID, "emotion must be known"
     assert (
         sample.emotion_id == EMOTION_TO_ID[sample.emotion]

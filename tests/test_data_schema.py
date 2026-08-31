@@ -12,7 +12,7 @@ def make_sample(tmp_path) -> AudioSample:
     return AudioSample(
         sample_id="ravdess_7f3a91c8d4e2b105",
         dataset="ravdess",
-        source_path=audio_path,
+        sample_path=audio_path,
         emotion="angry",
         emotion_id=4,
         speaker_id="ravdess_actor_01",
@@ -44,7 +44,7 @@ def test_audio_sample_metadata_is_copied(tmp_path) -> None:
     sample = AudioSample(
         sample_id="ravdess_7f3a91c8d4e2b105",
         dataset="ravdess",
-        source_path=audio_path,
+        sample_path=audio_path,
         emotion="angry",
         emotion_id=4,
         speaker_id="ravdess_actor_01",
@@ -62,7 +62,7 @@ def test_validation_rejects_emotion_id_mismatch(tmp_path) -> None:
     invalid_sample = AudioSample(
         sample_id=sample.sample_id,
         dataset=sample.dataset,
-        source_path=sample.source_path,
+        sample_path=sample.sample_path,
         emotion=sample.emotion,
         emotion_id=3,
         speaker_id=sample.speaker_id,
