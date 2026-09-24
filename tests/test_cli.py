@@ -8,3 +8,11 @@ def test_parser_accepts_flat_workflow_commands() -> None:
         args = parser.parse_args([command])
 
         assert args.command == command
+
+
+def test_preprocess_parser_stays_simple() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["preprocess"])
+
+    assert args.command == "preprocess"

@@ -62,8 +62,11 @@ project emotion id 4.
 import logging
 from pathlib import Path
 
-from psychic.data.ids import build_sample_id
-from psychic.data.schema import AudioSample, validate_audio_sample
+from psychic.data.schema import (
+    AudioSample,
+    build_sample_id,
+    validate_audio_sample,
+)
 from psychic.labels import EMOTION_LABELS, EMOTION_TO_ID
 
 logger = logging.getLogger(__name__)

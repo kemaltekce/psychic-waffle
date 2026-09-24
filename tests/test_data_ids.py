@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from psychic.data.ids import HASH_LENGTH, build_sample_id
+from psychic.data.schema import HASH_LENGTH, build_sample_id
 
 
 def test_build_sample_id_is_stable_across_root_locations() -> None:
