@@ -6,13 +6,17 @@
   for model code and RAVDESS audio data. Treat data loading, audio transforms,
   tensor shapes, train/eval mode, randomness, metrics, model serialization, and
   filesystem paths as important boundaries.
-- Planned tooling: Python with `uv` for environment/dependency workflow,
-  `ruff` for lint/format, and `pytest` for tests. This migration is not
-  configured yet. Do not assume these commands work, and do not present them as
-  current project commands until the migration is done.
+- Tooling: Python with `uv` for environment/dependency workflow,
+  `ruff` for lint/format, and `pytest` for tests. Current agent commands:
+  - `uv sync` to install the locked environment.
+  - `uv run ruff check .` for lint.
+  - `uv run ruff format <changed-files>` to format edited Python files.
+  - `uv run pytest` for focused regression checks.
+  - `uv run psy train` uses the settings in `psychic/training/engine.py`.
+    For development, call `train(...)` from Python with a small cache slice
+    and a low epoch count.
 - This file is for agent working rules. Keep human usage and onboarding in
-  `README.md`. After the tooling migration, add the small set of current agent
-  commands here.
+  `README.md`.
 - Keep project-specific ML/audio guidance in this section so the general
   section can be copied to other projects.
 - Prefer small real-data slices and simulations for development feedback before

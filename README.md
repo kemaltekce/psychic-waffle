@@ -4,165 +4,111 @@
   🔮 psychic-waffle 🧇
 </h1>
 
-**Speech Emotion Project** focused on building Speech Emotion Recognition (SER) models with the RAVDESS dataset.
+Speech emotion recognition project with PyTorch and RAVDESS. The project
+provides deterministic waveform caching, a training pipeline, and inference pipeline.
+The eight output labels are `neutral`, `calm`, `happy`, `sad`, `angry`,
+`fearful`, `disgust`, and `surprised`.
 
-`psychic-waffle` trains and evaluates a speech emotion recognition pipeline for classifying spoken audio into these 8 emotions:
+## 🚀 Setup
 
-- neutral
-- calm
-- happy
-- sad
-- angry
-- fearful
-- disgust
-- surprised
-
-The project ships with a **CLI tool with a training pipeline and optional model save/load helpers**. Additionally, there is also a small **human performance script** so you can compare model performance against human performance.
-
-<div align="center">
-  <img src="img/terminal.png">
-</div>
-
-Disclaimer: The purpose of this project was to learn more about **deep learning**, how to build and manage **machine learning projects**, how to work with **audio data** and to learn the basics of **pytorch**.
-
-## 🚀 Quick Start
-
-### Installation
-
-1. Create an environment, e.g. with conda for a M-chip Mac with
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run
+from the repository root:
 
 ```bash
-CONDA_SUBDIR=osx-arm64 conda create -n psychicwaffle python=3.12.4 -c conda-forge
-conda activate psychicwaffle
-conda config --env --set subdir osx-arm64
+uv sync
+uv run psy --help
 ```
 
-2. Install the project with
+The project pins Python 3.12.4 and dependencies in `uv.lock`.
 
-```bash
-pip install -e .
-```
+## &#x1F50A; Prepare the data
 
-3. If you want to use the frozen/pinned package versions install them with
-
-```bash
-pip install -r requirements.txt
-```
-
-## &#x1F50A; Data
-
-This project uses the Ravdess dataset. Load the zip file `Audio_Speech_Actors_01-24.zip` from the [Affective Data Sience Lab](https://zenodo.org/records/1188976?preview_file=Audio_Speech_Actors_01-24.zip), save it in the `data/` directory and unzip it there.
-
-You should now have a folder in `data/` called `Ravdess_Audio_Speech_Actors_01-24` with other folders inside for each actor.
-
-Expected structure:
+Download `Audio_Speech_Actors_01-24.zip` from the
+[RAVDESS dataset](https://zenodo.org/records/1188976) and extract it so the actor
+folders are directly under `data/original/ravdess/`:
 
 ```text
-data/
-└── Ravdess_Audio_Speech_Actors_01-24/
-    ├── Actor_01/
-    ├── Actor_02/
-    ├── ...
-    └── Actor_24/
+data/original/ravdess/
+  Actor_01/03-01-01-01-01-01-01.wav
+  ...
+  Actor_24/
 ```
-
-## &#x1F3C2; Running The Project
-
-Run the project with `psy` after installing.
 
 ```bash
-psy --train [--save] [--predict]
-psy --load --predict
+uv run psy preprocess
 ```
 
-The CLI supports training a fresh model, loading the latest saved model, saving a trained model, and running predictions on local audio files.
+This rebuilds `data/preprocessed/waveform_16khz_3s_v1/`, replacing any previous
+cache there. It stores mono float32 waveforms at 16 kHz, center padded/cropped
+to three seconds (`[48000]`), plus the preprocessing contract, sample manifest,
+and speaker-disjoint splits. For the complete dataset, actors 1–18 train,
+19–21 validate, and 22–24 are held out for testing.
 
-### CLI Arguments
+## Train and validate
 
-#### `--train`
+```bash
+uv run psy train
+```
 
-Train a new model with the training pipeline.
+Training reads cached tensors; it does not require the original audio files.
+Epochs, directories, learning rate, batch size, seed, and device are defined in
+the `train` function in `psychic/training/engine.py`.
 
+To try another architecture, add its class to `MODELS` in
+`psychic/training/model.py` and set `CURRENT_MODEL` at the top of that file.
+`psy train` uses that selection; Python calls can override it with `model_name`.
+Each class provides
+`preprocess_data(waveforms)`, `forward(x)`, and `build_model_config()`. The config
+records its name, version, constructor `init_args`, labels, and preprocessing
+settings. Models choose their own transforms from `preprocessing.py` and
+return eight emotion logits in the canonical label order. Training and loading
+use the same mapping, so neither needs architecture-specific branches.
 
-#### `--load`
+Python experiments can adjust the current model's constructor arguments:
 
-Load the latest saved model from the `models/` folder.
+```python
+from psychic.training.engine import train
 
+train(model_kwargs={"dropout_p": 0.2}, epochs=10)
+```
 
-#### `--save`
-
-Save the trained model into the `models/` folder.
-
-Important: `--save` only makes sense together with `--train`
-
-
-#### `--predict`
-
-Predict all supported audio files from the `to_predict/` folder.
+Every run creates a new folder:
 
 ```text
-to_predict/
-├── sample-1.wav
-├── sample-2.wav
-└── ...
+models/<timestamp>_<model_name>/
+  checkpoint.pt
+  config.json
+  metrics.json
 ```
 
-Examples:
+- `checkpoint.pt` holds the best model state dict, epoch, score, and load-critical
+  configuration. It can be reloaded on CPU or an available accelerator with
+  `psychic.inference.model.load_model`, which selects the saved architecture from
+  `MODELS` and verifies its config before loading weights. This rebuild is still
+  model version 1. Preprocessing settings live inside `config["model"]`.
+- `config.json` records model/feature settings, labels, waveform contract,
+  seed, device, optimizer settings, class weights, early-stopping patience,
+  and the split assignments used for the run. When calling `evaluate` directly,
+  pass these class weights on the model's device to reproduce validation loss.
+- `metrics.json` contains the selected epoch's metrics and every epoch's history.
+  Training metrics describe the training pass, when dropout is active and weights
+  change between batches. Validation metrics describe the saved checkpoint.
+
+Test tensors are held out throughout training. `psy eval` (score a saved model
+without retraining) and `psy predict-file` are still pending. Checkpoints support
+evaluation/inference loading; optimizer-state resumption is not implemented.
+Data and generated model folders stay out of Git.
+
+## Development
 
 ```bash
-psy --train --predict
-psy --load --predict
+uv run ruff check .
+uv run pytest
 ```
 
-## &#x1F9D9; Human-Level Performance Test
+Use `uv add PACKAGE` for dependencies and `uv add --dev PACKAGE` for development
+tools. Format changed Python files with `uv run ruff format PATH`.
 
-The repository includes an interactive script at `scripts/human-level-performance-test` to estimate how well a human can identify emotions from the same RAVDESS speech samples.
-
-### What It Does
-
-- loads the RAVDESS audio dataset
-- asks how many files you want to test
-- plays random samples one by one
-- lets you guess the displayed emotion
-- reports final accuracy across the chosen samples
-
-During the test:
-
-- type the number of the emotion you think you heard
-- type `replay` to hear the sample again
-
-### Run It
-
-```bash
-python scripts/human-level-performance-test
-```
-
-### Optional Argument
-
-#### `--feedback`
-
-Show immediate feedback after each guess instead of waiting until the end.
-
-Example:
-
-```bash
-python scripts/human-level-performance-test --feedback
-```
-
-### Notes
-
-- the script currently uses `afplay` for playback, so it expects macOS audio playback support
-- it requires the RAVDESS dataset to already be present in `data/`
-
-## &#x1F9D1;&#x200D;&#x1F4BB; Development
-
-If you want to install new dependencies, follow the instructions below:
-
-1. Add the new package to `pyproject.toml`
-2. Install it with `pip install -e .`
-3. Freeze/pin versions in `requirements.txt` by running
-
-```bash
-pip-compile pyproject.toml --resolver=backtracking
-```
+`legacy/` contains the previous implementation for reference. The human
+performance script in `scripts/` still needs migration to the rebuilt loader.
 

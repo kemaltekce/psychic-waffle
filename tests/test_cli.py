@@ -16,3 +16,9 @@ def test_preprocess_parser_stays_simple() -> None:
     args = parser.parse_args(["preprocess"])
 
     assert args.command == "preprocess"
+
+
+def test_train_parser_stays_simple() -> None:
+    args = build_parser().parse_args(["train"])
+
+    assert vars(args) == {"command": "train"}

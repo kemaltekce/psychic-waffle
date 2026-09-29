@@ -7,6 +7,7 @@ from psychic.data.preprocessing import preprocess_cache_waveforms
 from psychic.data.ravdess import load_ravdess_samples
 from psychic.data.splits import build_speaker_disjoint_splits
 from psychic.logging import configure_logging
+from psychic.training.engine import train
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
         "preprocess",
         help="Build the deterministic RAVDESS waveform cache.",
     )
-    subparsers.add_parser("train")
+    subparsers.add_parser(
+        "train",
+        help="Train and validate the CNN from cached waveforms.",
+    )
     subparsers.add_parser("eval")
     subparsers.add_parser("predict-file")
 
@@ -41,3 +45,7 @@ def main() -> None:
         samples = load_ravdess_samples()
         splits = build_speaker_disjoint_splits(samples)
         preprocess_cache_waveforms(samples, splits)
+    elif args.command == "train":
+        train()
+    else:
+        parser.error(f"{args.command} is not implemented yet")
