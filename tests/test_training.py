@@ -15,7 +15,10 @@ from psychic.data.preprocessing import (
 from psychic.inference.model import load_model
 from psychic.labels import EMOTION_LABELS
 from psychic.training.engine import build_class_weights, evaluate, train
-from psychic.training.metrics import classification_metrics
+from psychic.training.metrics import (
+    classification_metrics,
+    format_classification_report,
+)
 from psychic.training.model import CNN, MODELS
 from psychic.training.preprocessing import waveforms_to_log_mel
 
@@ -158,6 +161,42 @@ def test_macro_f1_includes_absent_classes_and_rejects_invalid_ids():
     metrics = classification_metrics(labels, predictions)
     assert metrics["accuracy"] == 3 / 5
     assert metrics["macro_f1"] == pytest.approx((2 / 3 + 2 / 3) / 8)
+    assert metrics["labels"] == list(EMOTION_LABELS)
+    matrix = torch.tensor(metrics["confusion_matrix"])
+    assert matrix.shape == (8, 8)
+    assert matrix.sum().item() == 5
+    assert matrix[:3, :3].tolist() == [[1, 1, 0], [0, 2, 0], [0, 1, 0]]
+    assert matrix[3:].sum().item() == matrix[:, 3:].sum().item() == 0
+    assert metrics["per_emotion"]["neutral"] == pytest.approx(
+        {"precision": 1, "recall": 0.5, "f1": 2 / 3, "support": 2}
+    )
+    assert metrics["per_emotion"]["calm"] == pytest.approx(
+        {"precision": 0.5, "recall": 1, "f1": 2 / 3, "support": 2}
+    )
+    assert metrics["per_emotion"]["happy"] == {
+        "precision": 0,
+        "recall": 0,
+        "f1": 0,
+        "support": 1,
+    }
+    assert metrics["per_emotion"]["sad"] == {
+        "precision": 0,
+        "recall": 0,
+        "f1": 0,
+        "support": 0,
+    }
+    predicted_only = classification_metrics(
+        torch.tensor([0]), torch.tensor([1])
+    )
+    assert predicted_only["per_emotion"]["calm"] == {
+        "precision": 0,
+        "recall": 0,
+        "f1": 0,
+        "support": 0,
+    }
+    formatted = format_classification_report(metrics)
+    assert "rows=true, columns=predicted; counts" in formatted
+    assert "Precision" in formatted and "Support" in formatted
     with pytest.raises(AssertionError):
         classification_metrics(labels, torch.tensor([0, 1, 1, 1, 8]))
 
@@ -204,6 +243,9 @@ def test_evaluate_weights_partial_batches_and_preserves_model_state(
     )
     assert metrics["accuracy"] == 1 / 5
     assert metrics["macro_f1"] == pytest.approx((2 / 6) / 8)
+    assert metrics["confusion_matrix"][0][0] == 1
+    assert metrics["confusion_matrix"][1][0] == 4
+    assert metrics["per_emotion"]["calm"]["support"] == 4
 
 
 @pytest.mark.parametrize(
@@ -260,7 +302,10 @@ def test_cache_checks_tensor_contents_when_loading(waveform_cache, waveform):
         datasets["train"][0]
 
 
-def test_training_selects_best_reloads_and_repeats_with_seed(waveform_cache):
+def test_training_selects_best_reloads_and_repeats_with_seed(
+    waveform_cache, caplog
+):
+    caplog.set_level("INFO", logger="psychic.training.engine")
     # Invalid contents prove that training never loads held-out test tensors.
     (waveform_cache / "tensors/test_0.pt").write_bytes(b"held-out test data")
     kwargs = {
@@ -274,10 +319,15 @@ def test_training_selects_best_reloads_and_repeats_with_seed(waveform_cache):
     run_dir = train(**kwargs)
     checkpoint = torch.load(run_dir / "checkpoint.pt", weights_only=True)
     metrics = json.loads((run_dir / "metrics.json").read_text())
+    report = json.loads((run_dir / "validation_report.json").read_text())
     config = json.loads((run_dir / "config.json").read_text())
     best = max(metrics["history"], key=lambda row: row["val_macro_f1"])
     assert checkpoint["epoch"] == metrics["best_epoch"] == best["epoch"]
     assert checkpoint["val_macro_f1"] == metrics["val_macro_f1"]
+    assert report["epoch"] == metrics["best_epoch"]
+    assert report["split"] == "val"
+    assert caplog.text.count("Best checkpoint validation report") == 1
+    assert format_classification_report(report) in caplog.text
     assert checkpoint["config"] == config
     assert "format_version" not in checkpoint
     # Training counts are [3, 2, 4], whereas validation counts are [1, 1, 1].
@@ -293,8 +343,13 @@ def test_training_selects_best_reloads_and_repeats_with_seed(waveform_cache):
         torch.device("cpu"),
         torch.tensor(config["training"]["class_weights"]),
     )
-    for key, value in reloaded_metrics.items():
-        assert value == pytest.approx(metrics[f"val_{key}"], abs=1e-6)
+    for key in ("loss", "accuracy", "macro_f1"):
+        assert reloaded_metrics[key] == pytest.approx(
+            metrics[f"val_{key}"], abs=1e-6
+        )
+        assert report[key] == metrics[f"val_{key}"]
+    for key in ("labels", "confusion_matrix", "per_emotion"):
+        assert report[key] == reloaded_metrics[key]
     with torch.no_grad():
         features = model.preprocess_data(datasets["val"][0][0][None])
         assert model(features).shape == (1, 8)
@@ -307,6 +362,10 @@ def test_training_selects_best_reloads_and_repeats_with_seed(waveform_cache):
     repeat_dir = train(**kwargs)
     assert repeat_dir != run_dir
     assert json.loads((repeat_dir / "metrics.json").read_text()) == metrics
+    assert (
+        json.loads((repeat_dir / "validation_report.json").read_text())
+        == report
+    )
     repeated, _ = load_model(repeat_dir / "checkpoint.pt")
     for name, value in model.state_dict().items():
         assert torch.equal(value, repeated.state_dict()[name])
@@ -374,10 +433,16 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
         torch.tensor(config["training"]["class_weights"]),
     )
     saved_metrics = json.loads((run_dir / "metrics.json").read_text())
+    report = json.loads((run_dir / "validation_report.json").read_text())
     assert saved_metrics["best_epoch"] == 1
+    assert report["epoch"] == 1
     assert len(saved_metrics["history"]) == 3
     assert config["training"]["early_stopping_patience"] == 2
     assert list(run_dir.glob("*.pt")) == [run_dir / "checkpoint.pt"]
     assert not (run_dir / "checkpoint.tmp").exists()
-    for key, value in metrics.items():
-        assert value == pytest.approx(saved_metrics[f"val_{key}"], abs=1e-6)
+    for key in ("loss", "accuracy", "macro_f1"):
+        assert metrics[key] == pytest.approx(
+            saved_metrics[f"val_{key}"], abs=1e-6
+        )
+    for key in ("labels", "confusion_matrix", "per_emotion"):
+        assert report[key] == metrics[key]

@@ -79,6 +79,7 @@ models/<timestamp>_<model_name>/
   checkpoint.pt
   config.json
   metrics.json
+  validation_report.json
 ```
 
 - `checkpoint.pt` holds the best model state dict, epoch, score, and load-critical
@@ -93,6 +94,12 @@ models/<timestamp>_<model_name>/
 - `metrics.json` contains the selected epoch's metrics and every epoch's history.
   Training metrics describe the training pass, when dropout is active and weights
   change between batches. Validation metrics describe the saved checkpoint.
+- `validation_report.json` records the best checkpoint's epoch, validation loss,
+  accuracy, macro F1, confusion matrix, and per-emotion precision, recall, F1,
+  and support. Matrix rows are true emotions and columns are predictions, in
+  the recorded label order; counts and per-emotion scores are unweighted.
+  Undefined precision/recall/F1 are zero. Training also logs this report once
+  at the end, using the selected epoch rather than the last epoch.
 
 Test tensors are held out throughout training. `psy eval` (score a saved model
 without retraining) and `psy predict-file` are still pending. Checkpoints support

@@ -13,7 +13,10 @@ from torch.utils.data import DataLoader
 from psychic.data.cache import load_waveform_cache
 from psychic.data.preprocessing import DEFAULT_WAVEFORM_CACHE_DIR
 from psychic.labels import EMOTION_LABELS
-from psychic.training.metrics import classification_metrics
+from psychic.training.metrics import (
+    classification_metrics,
+    format_classification_report,
+)
 from psychic.training.model import CURRENT_MODEL, MODELS
 
 logger = logging.getLogger(__name__)
@@ -54,7 +57,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     class_weights: torch.Tensor | None = None,
-) -> dict[str, float]:
+) -> dict:
     """Enter train mode, optimize one pass, and report online batch metrics."""
     model.train()
     total_loss = 0.0
@@ -91,12 +94,13 @@ def evaluate(
     loader: DataLoader,
     device: torch.device,
     class_weights: torch.Tensor | None = None,
-) -> dict[str, float]:
+) -> dict:
     """Enter and leave the model in eval mode; score without changing weights.
 
     Loss uses the sum of target weights, including the final partial batch
     (or sample count when unweighted). Accuracy
     and macro F1 are computed over the entire split, not averaged per batch.
+    Include unweighted confusion counts and per-emotion scores.
     """
     model.eval()
     total_loss = 0.0
@@ -129,7 +133,7 @@ def _epoch_metrics(
     total_weight: float,
     labels: list[torch.Tensor],
     predictions: list[torch.Tensor],
-) -> dict[str, float]:
+) -> dict:
     """Aggregate a nonempty epoch using target weights for loss averaging."""
     labels = torch.cat(labels)
     metrics = classification_metrics(labels, torch.cat(predictions))
@@ -156,7 +160,8 @@ def train(
     ties retain the earlier checkpoint. Stop after early_stopping_patience
     epochs without improvement. Class weights come only from training labels
     and are used for training and validation loss. Test tensors are never
-    loaded.
+    loaded. Save validation_report.json with the best checkpoint's confusion
+    counts and per-emotion scores, and log that report once at the end.
     Seed initialization, dropout, and train shuffling; accelerator results
     are not guaranteed bit-for-bit reproducible across devices or versions.
     Choose a class from MODELS with model_name and pass its constructor args
@@ -234,8 +239,14 @@ def train(
             model, val_loader, selected_device, class_weights
         )
         epoch_metrics = {
-            **{f"train_{key}": value for key, value in train_metrics.items()},
-            **{f"val_{key}": value for key, value in val_metrics.items()},
+            **{
+                f"train_{key}": train_metrics[key]
+                for key in ("loss", "accuracy", "macro_f1")
+            },
+            **{
+                f"val_{key}": val_metrics[key]
+                for key in ("loss", "accuracy", "macro_f1")
+            },
         }
         history.append({"epoch": epoch, **epoch_metrics})
         if val_metrics["macro_f1"] > best_f1:
@@ -258,6 +269,8 @@ def train(
                 "best_metric": "val_macro_f1",
                 **epoch_metrics,
             }
+            best_report = {"epoch": epoch, "split": "val", **val_metrics}
+            _write_json(run_dir / "validation_report.json", best_report)
         _write_json(run_dir / "metrics.json", {**metrics, "history": history})
         logger.info(
             "Epoch %s/%s | train loss=%.4f acc=%.4f F1=%.4f | "
@@ -285,6 +298,11 @@ def train(
         run_dir / "checkpoint.pt",
         metrics["best_epoch"],
         best_f1,
+    )
+    logger.info(
+        "Best checkpoint validation report (epoch=%s):\n%s",
+        metrics["best_epoch"],
+        format_classification_report(best_report),
     )
     return run_dir
 
