@@ -30,7 +30,7 @@ def waveform_cache(tmp_path):
     records = []
     splits = {"split_id": "tiny_v1", "strategy": "speaker_disjoint"}
     time_sec = torch.arange(48000, dtype=torch.float32) / 16000
-    for name, count in (("train", 9), ("val", 3), ("test", 1)):
+    for name, count in (("train", 9), ("val", 3), ("test", 5)):
         splits[name] = []
         splits[f"{name}_speakers"] = [name]
         for index in range(count):
@@ -306,8 +306,6 @@ def test_training_selects_best_reloads_and_repeats_with_seed(
     waveform_cache, caplog
 ):
     caplog.set_level("INFO", logger="psychic.training.engine")
-    # Invalid contents prove that training never loads held-out test tensors.
-    (waveform_cache / "tensors/test_0.pt").write_bytes(b"held-out test data")
     kwargs = {
         "cache_dir": waveform_cache,
         "models_dir": waveform_cache.parent / "models",
@@ -320,6 +318,7 @@ def test_training_selects_best_reloads_and_repeats_with_seed(
     checkpoint = torch.load(run_dir / "checkpoint.pt", weights_only=True)
     metrics = json.loads((run_dir / "metrics.json").read_text())
     report = json.loads((run_dir / "validation_report.json").read_text())
+    test_report = json.loads((run_dir / "test_report.json").read_text())
     config = json.loads((run_dir / "config.json").read_text())
     best = max(metrics["history"], key=lambda row: row["val_macro_f1"])
     assert checkpoint["epoch"] == metrics["best_epoch"] == best["epoch"]
@@ -328,6 +327,10 @@ def test_training_selects_best_reloads_and_repeats_with_seed(
     assert report["split"] == "val"
     assert caplog.text.count("Best checkpoint validation report") == 1
     assert format_classification_report(report) in caplog.text
+    assert test_report["epoch"] == metrics["best_epoch"]
+    assert test_report["split"] == "test"
+    assert caplog.text.count("Best checkpoint test report") == 1
+    assert format_classification_report(test_report) in caplog.text
     assert checkpoint["config"] == config
     assert "format_version" not in checkpoint
     # Training counts are [3, 2, 4], whereas validation counts are [1, 1, 1].
@@ -350,6 +353,19 @@ def test_training_selects_best_reloads_and_repeats_with_seed(
         assert report[key] == metrics[f"val_{key}"]
     for key in ("labels", "confusion_matrix", "per_emotion"):
         assert report[key] == reloaded_metrics[key]
+    reloaded_test_metrics = evaluate(
+        model,
+        DataLoader(datasets["test"], batch_size=2),
+        torch.device("cpu"),
+        torch.tensor(config["training"]["class_weights"]),
+    )
+    for key in ("loss", "accuracy", "macro_f1"):
+        assert test_report[key] == pytest.approx(
+            reloaded_test_metrics[key], abs=1e-6
+        )
+    for key in ("labels", "confusion_matrix", "per_emotion"):
+        assert test_report[key] == reloaded_test_metrics[key]
+    assert sum(map(sum, test_report["confusion_matrix"])) == 5
     with torch.no_grad():
         features = model.preprocess_data(datasets["val"][0][0][None])
         assert model(features).shape == (1, 8)
@@ -365,6 +381,10 @@ def test_training_selects_best_reloads_and_repeats_with_seed(
     assert (
         json.loads((repeat_dir / "validation_report.json").read_text())
         == report
+    )
+    assert (
+        json.loads((repeat_dir / "test_report.json").read_text())
+        == test_report
     )
     repeated, _ = load_model(repeat_dir / "checkpoint.pt")
     for name, value in model.state_dict().items():
@@ -386,6 +406,10 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
             super().__init__()
             self.bins = bins
             self.classifier = nn.Linear(bins, len(EMOTION_LABELS))
+            # Keep F1 tied while loss changes so best and last weights differ.
+            with torch.no_grad():
+                self.classifier.bias.zero_()
+                self.classifier.bias[-1] = 2
 
         def preprocess_data(self, waveforms):
             return waveforms.reshape(len(waveforms), self.bins, -1).mean(2)
@@ -413,8 +437,7 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
             epochs=20,
             early_stopping_patience=2,
             batch_size=4,
-            # Updates below float32 precision keep predictions unchanged.
-            learning_rate=1e-30,
+            learning_rate=0.01,
             device="cpu",
         )
         model, config = load_model(run_dir / "checkpoint.pt")
@@ -437,6 +460,10 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
     assert saved_metrics["best_epoch"] == 1
     assert report["epoch"] == 1
     assert len(saved_metrics["history"]) == 3
+    assert (
+        saved_metrics["history"][-1]["val_loss"]
+        < saved_metrics["history"][0]["val_loss"]
+    )
     assert config["training"]["early_stopping_patience"] == 2
     assert list(run_dir.glob("*.pt")) == [run_dir / "checkpoint.pt"]
     assert not (run_dir / "checkpoint.tmp").exists()
@@ -446,3 +473,38 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
         )
     for key in ("labels", "confusion_matrix", "per_emotion"):
         assert report[key] == metrics[key]
+    test_report = json.loads((run_dir / "test_report.json").read_text())
+    assert test_report == {
+        "epoch": 1,
+        "split": "test",
+        **evaluate(
+            model,
+            DataLoader(datasets["test"], batch_size=4),
+            torch.device("cpu"),
+            torch.tensor(config["training"]["class_weights"]),
+        ),
+    }
+
+
+def test_final_test_failure_preserves_completed_training(waveform_cache):
+    torch.save(torch.zeros(12), waveform_cache / "tensors/test_0.pt")
+    models_dir = waveform_cache.parent / "models"
+    with pytest.raises(AssertionError, match="waveform shape must match"):
+        train(
+            waveform_cache,
+            models_dir,
+            model_kwargs={"conv_out_channels": (4, 4)},
+            epochs=2,
+            batch_size=4,
+            device="cpu",
+        )
+
+    (run_dir,) = models_dir.iterdir()
+    metrics = json.loads((run_dir / "metrics.json").read_text())
+    report = json.loads((run_dir / "validation_report.json").read_text())
+    assert len(metrics["history"]) == 2
+    assert report["epoch"] == metrics["best_epoch"]
+    model, config = load_model(run_dir / "checkpoint.pt")
+    assert not model.training
+    assert config == json.loads((run_dir / "config.json").read_text())
+    assert not (run_dir / "test_report.json").exists()

@@ -5,7 +5,9 @@ import torch
 from psychic.labels import EMOTION_LABELS
 
 
-def classification_metrics(labels: torch.Tensor, predictions: torch.Tensor) -> dict:
+def classification_metrics(
+    labels: torch.Tensor, predictions: torch.Tensor
+) -> dict:
     """Return scalar metrics, confusion counts, and per-emotion scores.
 
     Inputs are nonempty CPU int64 class-id vectors. Matrix rows are true

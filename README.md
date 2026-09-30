@@ -44,13 +44,16 @@ to three seconds (`[48000]`), plus the preprocessing contract, sample manifest,
 and speaker-disjoint splits. For the complete dataset, actors 1–18 train,
 19–21 validate, and 22–24 are held out for testing.
 
-## Train and validate
+## Train, validate, and test
 
 ```bash
 uv run psy train
 ```
 
 Training reads cached tensors; it does not require the original audio files.
+Every run validates after each epoch, selects the best checkpoint by validation
+macro F1, then reloads that checkpoint and evaluates the test split once.
+This final test evaluation also runs after early stopping.
 Epochs, directories, learning rate, batch size, seed, and device are defined in
 the `train` function in `psychic/training/engine.py`.
 
@@ -80,6 +83,7 @@ models/<timestamp>_<model_name>/
   config.json
   metrics.json
   validation_report.json
+  test_report.json
 ```
 
 - `checkpoint.pt` holds the best model state dict, epoch, score, and load-critical
@@ -90,7 +94,8 @@ models/<timestamp>_<model_name>/
 - `config.json` records model/feature settings, labels, waveform contract,
   seed, device, optimizer settings, class weights, early-stopping patience,
   and the split assignments used for the run. When calling `evaluate` directly,
-  pass these class weights on the model's device to reproduce validation loss.
+  pass these class weights on the model's device to reproduce validation or
+  test loss.
 - `metrics.json` contains the selected epoch's metrics and every epoch's history.
   Training metrics describe the training pass, when dropout is active and weights
   change between batches. Validation metrics describe the saved checkpoint.
@@ -100,9 +105,17 @@ models/<timestamp>_<model_name>/
   the recorded label order; counts and per-emotion scores are unweighted.
   Undefined precision/recall/F1 are zero. Training also logs this report once
   at the end, using the selected epoch rather than the last epoch.
+- `test_report.json` records the same fields for the held-out test split,
+  using the reloaded best checkpoint. Test loss uses the training-derived
+  class weights; accuracy, macro F1, confusion counts, and per-emotion scores
+  are unweighted. The pipeline logs the test report once at the end.
 
-Test tensors are held out throughout training. `psy eval` (score a saved model
-without retraining) and `psy predict-file` are still pending. Checkpoints support
+Test tensors are only read after training and validation finish; test scores
+do not affect checkpoint selection or early stopping. If final evaluation
+fails, the checkpoint and training/validation reports remain saved.
+To score an existing checkpoint without retraining, use
+`psychic.inference.model.load_model` and `psychic.training.engine.evaluate`
+from Python. `psy predict-file` is still pending. Checkpoints support
 evaluation/inference loading; optimizer-state resumption is not implemented.
 Data and generated model folders stay out of Git.
 
@@ -118,4 +131,3 @@ tools. Format changed Python files with `uv run ruff format PATH`.
 
 `legacy/` contains the previous implementation for reference. The human
 performance script in `scripts/` still needs migration to the rebuilt loader.
-

@@ -1,4 +1,4 @@
-"""Train on cached waveforms and select by validation macro F1."""
+"""Train on cached waveforms, select by validation macro F1, then test."""
 
 import json
 import logging
@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from psychic.data.cache import load_waveform_cache
 from psychic.data.preprocessing import DEFAULT_WAVEFORM_CACHE_DIR
+from psychic.inference.model import load_model
 from psychic.labels import EMOTION_LABELS
 from psychic.training.metrics import (
     classification_metrics,
@@ -154,14 +155,16 @@ def train(
     seed: int = 456,
     device: str = "auto",
 ) -> Path:
-    """Train/validate from v1 cache splits and return a new model run folder.
+    """Train, validate, and test from v1 cache; return a new model run folder.
 
     Save the first epoch with each strictly higher validation macro F1;
     ties retain the earlier checkpoint. Stop after early_stopping_patience
     epochs without improvement. Class weights come only from training labels
-    and are used for training and validation loss. Test tensors are never
-    loaded. Save validation_report.json with the best checkpoint's confusion
-    counts and per-emotion scores, and log that report once at the end.
+    and are used for training, validation, and test loss. After the epoch loop,
+    reload the best checkpoint and evaluate the test split once. Save and log
+    validation_report.json and test_report.json with that checkpoint's scores,
+    confusion counts, and per-emotion scores. Test tensors are only read during
+    final evaluation; if it fails, the saved training artifacts remain usable.
     Seed initialization, dropout, and train shuffling; accelerator results
     are not guaranteed bit-for-bit reproducible across devices or versions.
     Choose a class from MODELS with model_name and pass its constructor args
@@ -231,6 +234,8 @@ def train(
     history = []
     best_f1 = -1.0
     metrics = {}
+    train_metrics = {}
+    val_metrics = {}
     for epoch in range(1, epochs + 1):
         train_metrics = train_one_epoch(
             model, train_loader, optimizer, selected_device, class_weights
@@ -304,6 +309,39 @@ def train(
         metrics["best_epoch"],
         format_classification_report(best_report),
     )
+    model, _ = load_model(run_dir / "checkpoint.pt", selected_device)
+    test_loader = DataLoader(datasets["test"], batch_size=batch_size)
+    test_metrics = evaluate(model, test_loader, selected_device, class_weights)
+    test_report = {
+        "epoch": metrics["best_epoch"],
+        "split": "test",
+        **test_metrics,
+    }
+    _write_json(run_dir / "test_report.json", test_report)
+    logger.info(
+        "Best checkpoint test report (epoch=%s):\n%s",
+        metrics["best_epoch"],
+        format_classification_report(test_report),
+    )
+
+    lines = []
+    lines.extend(
+        [
+            "Evaluation summary:",
+            f"{'Dataset':>10} {'Loss':>10} {'Accuracy':>10} {'F1':>10}",
+            f"{'train':>10} {train_metrics['loss']:>10.4f} "
+            f"{train_metrics['accuracy']:>10.4f} "
+            f"{train_metrics['macro_f1']:>10.4f} ",
+            f"{'val':>10} {val_metrics['loss']:>10.4f} "
+            f"{val_metrics['accuracy']:>10.4f} "
+            f"{val_metrics['macro_f1']:>10.4f} ",
+            f"{'test':>10} {test_metrics['loss']:>10.4f} "
+            f"{test_metrics['accuracy']:>10.4f} "
+            f"{test_metrics['macro_f1']:>10.4f} ",
+        ]
+    )
+    logger.info("\n".join(lines))
+
     return run_dir
 
 

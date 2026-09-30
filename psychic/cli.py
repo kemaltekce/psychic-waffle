@@ -26,9 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser(
         "train",
-        help="Train and validate the CNN from cached waveforms.",
+        help="Train, validate, and test the best model from cached waveforms.",
     )
-    subparsers.add_parser("eval")
     subparsers.add_parser("predict-file")
 
     return parser
