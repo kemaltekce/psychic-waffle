@@ -61,11 +61,18 @@ To try another architecture, add its class to `MODELS` in
 `psychic/training/model.py` and set `CURRENT_MODEL` at the top of that file.
 `psy train` uses that selection; Python calls can override it with `model_name`.
 Each class provides
-`preprocess_data(waveforms)`, `forward(x)`, and `build_model_config()`. The config
+`preprocess_data(waveforms, augment=False)`, `forward(x)`, and
+`build_model_config()`. The config
 records its name, version, constructor `init_args`, labels, and preprocessing
 settings. Models choose their own transforms from `preprocessing.py` and
 return eight emotion logits in the canonical label order. Training and loading
 use the same mapping, so neither needs architecture-specific branches.
+
+Training defaults to `train(augment=True)`; use `train(augment=False)` for a
+run without augmentation. The same flag reaches `preprocess_data` and is
+saved in `config["training"]["augment"]`. Validation and test always pass
+`augment=False`. Inference callers should also use `False` (the default).
+These settings are recorded under `config["training"]["augmentation"]`.
 
 Python experiments can adjust the current model's constructor arguments:
 
@@ -97,8 +104,11 @@ models/<timestamp>_<model_name>/
   pass these class weights on the model's device to reproduce validation or
   test loss.
 - `metrics.json` contains the selected epoch's metrics and every epoch's history.
-  Training metrics describe the training pass, when dropout is active and weights
-  change between batches. Validation metrics describe the saved checkpoint.
+  Training metrics describe the training pass with the chosen augmentation
+  setting, when dropout is active and weights change between batches.
+  Validation metrics describe the saved checkpoint on unaugmented inputs.
+  The final evaluation summary shows train and validation metrics from this
+  selected epoch, alongside test metrics from the reloaded best checkpoint.
 - `validation_report.json` records the best checkpoint's epoch, validation loss,
   accuracy, macro F1, confusion matrix, and per-emotion precision, recall, F1,
   and support. Matrix rows are true emotions and columns are predictions, in

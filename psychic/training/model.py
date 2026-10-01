@@ -6,6 +6,8 @@ from torch import nn
 from psychic.labels import EMOTION_LABELS
 from psychic.training.preprocessing import (
     build_log_mel_config,
+    time_mask,
+    time_shift,
     waveforms_to_log_mel,
 )
 
@@ -31,6 +33,11 @@ class CNN(nn.Module):
     ) -> None:
         super().__init__()
         assert conv_out_channels, "at least one convolution block is required"
+        # Training settings are logged separately from the inference contract.
+        self.augmentation_config = {
+            "time_shift": {"max_shift_ms": 50.0},
+            "time_mask": {"max_frames": 10, "probability": 0.5},
+        }
         self.init_args = {
             "conv_out_channels": list(conv_out_channels),
             "dropout_p": dropout_p,
@@ -78,9 +85,26 @@ class CNN(nn.Module):
             nn.Linear(hidden_dim2, output_dim),
         )
 
-    def preprocess_data(self, waveforms: torch.Tensor) -> torch.Tensor:
-        """Convert CPU `[batch, 48000]` waveforms to log-mel CNN inputs."""
-        return waveforms_to_log_mel(waveforms)
+    def preprocess_data(
+        self, waveforms: torch.Tensor, augment: bool = False
+    ) -> torch.Tensor:
+        """Convert CPU `[batch, 48000]` to float32 `[batch, 1, 64, 301]`.
+
+        With augment=True, shift waveforms before feature extraction, then
+        mask normalized features. The caller controls augmentation separately
+        from train/eval mode. False is deterministic and leaves RNG untouched.
+        Input tensors are never modified.
+        """
+        if augment:
+            waveforms = time_shift(
+                waveforms, **self.augmentation_config["time_shift"]
+            )
+        features = waveforms_to_log_mel(waveforms)
+        if augment:
+            features = time_mask(
+                features, **self.augmentation_config["time_mask"]
+            )
+        return features
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Return logits; callers choose train/eval mode explicitly."""

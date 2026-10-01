@@ -20,7 +20,11 @@ from psychic.training.metrics import (
     format_classification_report,
 )
 from psychic.training.model import CNN, MODELS
-from psychic.training.preprocessing import waveforms_to_log_mel
+from psychic.training.preprocessing import (
+    time_mask,
+    time_shift,
+    waveforms_to_log_mel,
+)
 
 
 @pytest.fixture
@@ -153,6 +157,82 @@ def test_log_mel_silence_and_batch_independence():
     assert features[1].std(correction=0).item() == pytest.approx(1)
     with pytest.raises(AssertionError):
         waveforms_to_log_mel(waveforms.double())
+
+
+def test_time_shift_pads_without_wrapping_or_changing_inputs():
+    waveforms = torch.arange(1, 48001, dtype=torch.float32).repeat(32, 1)
+    original = waveforms.clone()
+    torch.manual_seed(7)
+    shifted = time_shift(waveforms)
+    assert shifted.shape == waveforms.shape
+    assert torch.equal(waveforms, original)
+    offsets = []
+    for source, result in zip(waveforms, shifted, strict=True):
+        nonzero = result.nonzero().flatten()
+        assert 48000 - 800 <= len(nonzero) <= 48000
+        # Ramps expose any wraparound, internal gaps, or changed samples.
+        assert torch.all(result[nonzero].diff() == 1)
+        assert torch.all(nonzero.diff() == 1)
+        offset = int(nonzero[0] - (result[nonzero[0]] - 1))
+        offsets.append(offset)
+        source_indices = nonzero - offset
+        assert torch.equal(result[nonzero], source[source_indices])
+        assert nonzero[0] == 0 or nonzero[-1] == 47999
+    assert min(offsets) < 0 < max(offsets)
+    assert len(set(offsets)) > 1
+    state = torch.get_rng_state().clone()
+    assert torch.equal(time_shift(waveforms, max_shift_ms=0), waveforms)
+    assert torch.equal(state, torch.get_rng_state())
+
+
+def test_time_mask_hides_one_interval_per_clip_without_mutation():
+    features = torch.ones(32, 1, 64, 301)
+    original = features.clone()
+    torch.manual_seed(7)
+    masked = time_mask(features)
+    assert torch.equal(features, original)
+    assert masked.shape == features.shape
+    mask = masked[:, 0, 0] == 0
+    assert torch.equal(masked == 0, mask[:, None, None, :].expand_as(masked))
+    assert 0 < mask.any(dim=1).sum() < len(features)
+    assert len(torch.unique(mask, dim=0)) > 2
+    for interval in mask:
+        indices = interval.nonzero().flatten()
+        assert len(indices) <= 10
+        assert torch.all(indices.diff() == 1)
+    assert torch.all(masked[masked != 0] == 1)
+    assert (time_mask(features, max_frames=1, probability=1) == 0).sum() == (
+        len(features) * 64
+    )
+    state = torch.get_rng_state().clone()
+    assert torch.equal(time_mask(features, probability=0), features)
+    assert torch.equal(time_mask(features, max_frames=0), features)
+    assert torch.equal(state, torch.get_rng_state())
+
+
+def test_preprocess_augmentation_flag_is_explicit_and_seeded():
+    model = CNN()
+    waveforms = torch.randn(4, 48000)
+    original = waveforms.clone()
+    expected = waveforms_to_log_mel(waveforms)
+    for training in (True, False):
+        model.train(training)
+        state = torch.get_rng_state().clone()
+        assert torch.equal(model.preprocess_data(waveforms), expected)
+        assert torch.equal(
+            model.preprocess_data(waveforms, augment=False), expected
+        )
+        assert torch.equal(state, torch.get_rng_state())
+        torch.manual_seed(42)
+        augmented = model.preprocess_data(waveforms, augment=True)
+        torch.manual_seed(42)
+        assert torch.equal(
+            augmented, model.preprocess_data(waveforms, augment=True)
+        )
+        assert augmented.shape == (4, 1, 64, 301)
+        assert torch.isfinite(augmented).all()
+        assert not torch.equal(augmented, expected)
+    assert torch.equal(waveforms, original)
 
 
 def test_macro_f1_includes_absent_classes_and_rejects_invalid_ids():
@@ -335,6 +415,8 @@ def test_training_selects_best_reloads_and_repeats_with_seed(
     assert "format_version" not in checkpoint
     # Training counts are [3, 2, 4], whereas validation counts are [1, 1, 1].
     assert config["training"]["class_weights"] == [1, 1.5, 0.75, 1, 1, 1, 1, 1]
+    assert config["training"]["augment"] is True
+    assert config["training"]["augmentation"] == CNN().augmentation_config
     assert "test_accuracy" not in metrics
     model, loaded_config = load_model(run_dir / "checkpoint.pt")
     assert not model.training
@@ -396,9 +478,15 @@ def test_training_selects_best_reloads_and_repeats_with_seed(
         load_model(run_dir / "incompatible.pt")
 
 
+@pytest.mark.parametrize("augment", [False, True])
 def test_other_architecture_early_stops_and_reloads_its_best_model(
     waveform_cache,
+    caplog,
+    augment,
 ):
+    caplog.set_level("INFO", logger="psychic.training.engine")
+    expected_training_augmentation = augment
+
     class WaveformClassifier(nn.Module):
         """Tiny real model using waveform bins instead of spectrograms."""
 
@@ -411,7 +499,10 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
                 self.classifier.bias.zero_()
                 self.classifier.bias[-1] = 2
 
-        def preprocess_data(self, waveforms):
+        def preprocess_data(self, waveforms, augment=False):
+            assert augment == (
+                self.training and expected_training_augmentation
+            )
             return waveforms.reshape(len(waveforms), self.bins, -1).mean(2)
 
         def forward(self, x):
@@ -439,6 +530,7 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
             batch_size=4,
             learning_rate=0.01,
             device="cpu",
+            augment=augment,
         )
         model, config = load_model(run_dir / "checkpoint.pt")
     finally:
@@ -465,6 +557,7 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
         < saved_metrics["history"][0]["val_loss"]
     )
     assert config["training"]["early_stopping_patience"] == 2
+    assert config["training"]["augment"] is augment
     assert list(run_dir.glob("*.pt")) == [run_dir / "checkpoint.pt"]
     assert not (run_dir / "checkpoint.tmp").exists()
     for key in ("loss", "accuracy", "macro_f1"):
@@ -484,6 +577,31 @@ def test_other_architecture_early_stops_and_reloads_its_best_model(
             torch.tensor(config["training"]["class_weights"]),
         ),
     }
+    (summary,) = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("Evaluation summary")
+    ]
+    assert summary.splitlines()[0] == "Evaluation summary (best epoch=1):"
+    summary_rows = {}
+    for line in summary.splitlines()[2:]:
+        split, *values = line.split()
+        summary_rows[split] = [float(value) for value in values]
+    best_epoch = saved_metrics["history"][0]
+    last_epoch = saved_metrics["history"][-1]
+    for split in ("train", "val"):
+        assert summary_rows[split] == pytest.approx(
+            [
+                best_epoch[f"{split}_{key}"]
+                for key in ("loss", "accuracy", "macro_f1")
+            ],
+            abs=0.00005,
+        )
+        assert summary_rows[split][0] != round(last_epoch[f"{split}_loss"], 4)
+    assert summary_rows["test"] == pytest.approx(
+        [test_report[key] for key in ("loss", "accuracy", "macro_f1")],
+        abs=0.00005,
+    )
 
 
 def test_final_test_failure_preserves_completed_training(waveform_cache):

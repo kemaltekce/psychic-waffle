@@ -58,14 +58,16 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     class_weights: torch.Tensor | None = None,
+    *,
+    augment: bool = True,
 ) -> dict:
-    """Enter train mode, optimize one pass, and report online batch metrics."""
+    """Optimize one pass with optional augmentation; report online metrics."""
     model.train()
     total_loss = 0.0
     total_weight = 0.0
     all_labels, all_predictions = [], []
     for waveforms, labels in loader:
-        features = model.preprocess_data(waveforms).to(device)
+        features = model.preprocess_data(waveforms, augment=augment).to(device)
         optimizer.zero_grad(set_to_none=True)
         logits = model(features)
         targets = labels.to(device)
@@ -108,7 +110,7 @@ def evaluate(
     total_weight = 0.0
     all_labels, all_predictions = [], []
     for waveforms, labels in loader:
-        features = model.preprocess_data(waveforms).to(device)
+        features = model.preprocess_data(waveforms, augment=False).to(device)
         logits = model(features)
         targets = labels.to(device)
         loss = nn.functional.cross_entropy(
@@ -148,12 +150,13 @@ def train(
     *,
     model_name: str = CURRENT_MODEL,
     model_kwargs: dict | None = None,
-    epochs: int = 100,
-    early_stopping_patience: int = 5,
+    epochs: int = 40,
+    early_stopping_patience: int = 40,
     batch_size: int = 16,
     learning_rate: float = 0.001,
     seed: int = 456,
     device: str = "auto",
+    augment: bool = True,
 ) -> Path:
     """Train, validate, and test from v1 cache; return a new model run folder.
 
@@ -165,11 +168,15 @@ def train(
     validation_report.json and test_report.json with that checkpoint's scores,
     confusion counts, and per-emotion scores. Test tensors are only read during
     final evaluation; if it fails, the saved training artifacts remain usable.
-    Seed initialization, dropout, and train shuffling; accelerator results
+    Seed initialization, augmentation, dropout, and train shuffling; results
     are not guaranteed bit-for-bit reproducible across devices or versions.
     Choose a class from MODELS with model_name and pass its constructor args
     via model_kwargs. It must define preprocess_data and build_model_config;
-    preprocessing accepts CPU waveforms and forward returns emotion logits.
+    preprocessing accepts CPU waveforms and an explicit augment flag (the
+    chosen training setting, always False for evaluation). Forward returns
+    emotion logits. The final summary uses train/val metrics from the epoch
+    selected by validation F1; train metrics remain online training metrics.
+    Optional model.augmentation_config settings are recorded with the run.
     """
     assert epochs > 0, "epochs must be positive"
     assert early_stopping_patience > 0, (
@@ -208,6 +215,8 @@ def train(
         "waveform_preprocessing": waveform_config,
         "model": model.build_model_config(),
         "training": {
+            "augment": augment,
+            "augmentation": getattr(model, "augmentation_config", {}),
             "epochs": epochs,
             "batch_size": batch_size,
             "optimizer": "adamw",
@@ -238,7 +247,12 @@ def train(
     val_metrics = {}
     for epoch in range(1, epochs + 1):
         train_metrics = train_one_epoch(
-            model, train_loader, optimizer, selected_device, class_weights
+            model,
+            train_loader,
+            optimizer,
+            selected_device,
+            class_weights,
+            augment=augment,
         )
         val_metrics = evaluate(
             model, val_loader, selected_device, class_weights
@@ -324,22 +338,19 @@ def train(
         format_classification_report(test_report),
     )
 
-    lines = []
-    lines.extend(
-        [
-            "Evaluation summary:",
-            f"{'Dataset':>10} {'Loss':>10} {'Accuracy':>10} {'F1':>10}",
-            f"{'train':>10} {train_metrics['loss']:>10.4f} "
-            f"{train_metrics['accuracy']:>10.4f} "
-            f"{train_metrics['macro_f1']:>10.4f} ",
-            f"{'val':>10} {val_metrics['loss']:>10.4f} "
-            f"{val_metrics['accuracy']:>10.4f} "
-            f"{val_metrics['macro_f1']:>10.4f} ",
-            f"{'test':>10} {test_metrics['loss']:>10.4f} "
-            f"{test_metrics['accuracy']:>10.4f} "
-            f"{test_metrics['macro_f1']:>10.4f} ",
-        ]
-    )
+    lines = [
+        f"Evaluation summary (best epoch={metrics['best_epoch']}):",
+        f"{'Dataset':>10} {'Loss':>10} {'Accuracy':>10} {'F1':>10}",
+        f"{'train':>10} {metrics['train_loss']:>10.4f} "
+        f"{metrics['train_accuracy']:>10.4f} "
+        f"{metrics['train_macro_f1']:>10.4f}",
+        f"{'val':>10} {metrics['val_loss']:>10.4f} "
+        f"{metrics['val_accuracy']:>10.4f} "
+        f"{metrics['val_macro_f1']:>10.4f}",
+        f"{'test':>10} {test_metrics['loss']:>10.4f} "
+        f"{test_metrics['accuracy']:>10.4f} "
+        f"{test_metrics['macro_f1']:>10.4f}",
+    ]
     logger.info("\n".join(lines))
 
     return run_dir
