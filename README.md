@@ -129,6 +129,45 @@ from Python. `psy predict-file` is still pending. Checkpoints support
 evaluation/inference loading; optimizer-state resumption is not implemented.
 Data and generated model folders stay out of Git.
 
+## Live microphone inference
+
+From the repository root, with a trained checkpoint available:
+
+```bash
+uv run psy inference
+```
+
+The command loads `checkpoint.pt` from the newest timestamped run under
+`models/` once, on CPU. It captures the system's default microphone at its
+default sample rate, then resamples to the model's 16 kHz mono input. Allow
+microphone access for your terminal when the operating system requests it.
+An interactive terminal is required. Press Ctrl+C to stop.
+
+After the initial three-second buffer fills, the display updates about every
+250 ms with all eight emotions in fixed order. It always processes the newest
+window, even when inference runs slowly. The audio callback only copies input
+blocks; preprocessing, inference, and rendering run in the main loop.
+
+Scores use an exponential moving average with `alpha = 0.3`, initialized from
+the first prediction. A window is active when at least a tenth of its blocks
+(15 of 150, 20 ms each) exceed an RMS volume threshold of -40 dBFS. These blocks
+need not be consecutive. Below that count, the header reads
+`Listening... but no speech`, all bars become zero, and smoothing resets.
+This is a volume gate: background noise can activate it. Active windows show
+`Listening... analysing...`; scores are model outputs, not calibrated emotion
+certainty. Audio is held only in memory.
+
+The volume threshold and smoothing factor are constants in
+`psychic/inference/live.py`. Tune the threshold for your microphone and room:
+a more negative value admits quieter sounds. The command has no additional
+options and stops with an error if the newest checkpoint is incompatible or
+microphone capture fails; it does not switch models or devices automatically.
+
+Microphone capture uses [sounddevice](https://python-sounddevice.readthedocs.io/).
+Its pip wheels include PortAudio on macOS and Windows. On Linux, install the
+system PortAudio library if it is missing (for example, `libportaudio2` on
+Debian/Ubuntu).
+
 ## Development
 
 ```bash

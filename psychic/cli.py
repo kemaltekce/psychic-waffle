@@ -29,6 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Train, validate, and test the best model from cached waveforms.",
     )
     subparsers.add_parser("predict-file")
+    subparsers.add_parser(
+        "inference",
+        help="Show live emotion scores from the default microphone.",
+    )
 
     return parser
 
@@ -46,5 +50,14 @@ def main() -> None:
         preprocess_cache_waveforms(samples, splits)
     elif args.command == "train":
         train()
+    elif args.command == "inference":
+        from psychic.inference.live import run_inference
+
+        try:
+            run_inference()
+        except KeyboardInterrupt:
+            logger.info("Stopped listening.")
+        except (RuntimeError, OSError) as error:
+            parser.exit(1, f"psy inference: {error}\n")
     else:
         parser.error(f"{args.command} is not implemented yet")
