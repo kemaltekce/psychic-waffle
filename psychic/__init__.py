@@ -1,1 +1,2 @@
-"""Top-level package for psychic."""
+"""Speech emotion recognition package."""
+
