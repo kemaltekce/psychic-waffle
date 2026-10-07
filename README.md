@@ -44,7 +44,7 @@ to three seconds (`[48000]`), plus the preprocessing contract, sample manifest,
 and speaker-disjoint splits. For the complete dataset, actors 1–18 train,
 19–21 validate, and 22–24 are held out for testing.
 
-## Train, validate, and test
+## 📚 Train, validate, and test
 
 ```bash
 uv run psy train
@@ -129,7 +129,7 @@ from Python. `psy predict-file` is still pending. Checkpoints support
 evaluation/inference loading; optimizer-state resumption is not implemented.
 Data and generated model folders stay out of Git.
 
-## Live microphone inference
+## 🎙️ Live microphone inference
 
 From the repository root, with a trained checkpoint available:
 
@@ -168,7 +168,7 @@ Its pip wheels include PortAudio on macOS and Windows. On Linux, install the
 system PortAudio library if it is missing (for example, `libportaudio2` on
 Debian/Ubuntu).
 
-## Development
+## 🧙 Development
 
 ```bash
 uv run ruff check .
